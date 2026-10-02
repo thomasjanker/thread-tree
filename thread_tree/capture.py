@@ -38,6 +38,11 @@ def nrf_command(port: str, channel: int, script: str = DEFAULT_EXTCAP_SCRIPT) ->
                        "--channel", str(channel), "--metadata", "ieee802154-tap", "--fifo", "/dev/stdout"])
 
 
+def pan_filter(pan_id: int) -> str:
+    """Frames of our PAN, plus frames without any PAN ID (IEEE 802.15.4-2015 frames may omit both)."""
+    return f"wpan.dst_pan == 0x{pan_id:04x} || wpan.src_pan == 0x{pan_id:04x} || (!wpan.dst_pan && !wpan.src_pan)"
+
+
 def tshark_fields(tshark: str) -> set[str]:
     out = subprocess.run([tshark, "-G", "fields"], capture_output=True, text=True, check=True).stdout
     return {cols[2] for line in out.splitlines() if line.startswith("F\t") and len(cols := line.split("\t")) > 2}
@@ -55,7 +60,7 @@ def build_tshark_argv(tshark: str, source: str, chosen: dict[str, str], availabl
         # Thread MAC key is derived from the network key: Wireshark's "Thread hash" mode.
         argv += ["-o", f'uat:ieee802154_keys:"{network_key}","1","Thread hash"']
     if dataset and dataset.pan_id is not None and {"wpan.dst_pan", "wpan.src_pan"} <= available:
-        argv += ["-Y", f"wpan.dst_pan == 0x{dataset.pan_id:04x} || wpan.src_pan == 0x{dataset.pan_id:04x}"]
+        argv += ["-Y", pan_filter(dataset.pan_id)]
     argv += extra
     producer = None
     if kind == "pcap":

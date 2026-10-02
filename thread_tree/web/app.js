@@ -217,7 +217,10 @@ function nameEditor(n) {
   const save = h('button', { type: 'button', onclick: () => apply(input.value) }, t('d.name.save'));
   const clear = n.name ? h('button', { type: 'button', onclick: () => apply('') }, t('d.name.remove')) : null;
   return h('div', { class: 'name-editor' }, h('label', {}, t('d.name')), h('div', { class: 'toolbar' }, input, save, clear),
-    n.ext ? null : h('p', { class: 'muted' }, t('d.name.noext')), msg);
+    n.ext ? null : h('p', { class: 'muted' }, t('d.name.noext')),
+    n.name && n.identity_via_rloc ? h('p', { class: 'muted' },
+      t('d.name.viarloc').replace('{since}', ago(n.mac_confirmed)).replace('{rloc}', n.rloc16)) : null,
+    msg);
 }
 // The other end of a router link; a router that was never heard has no node entry.
 function neighborLabel(n, l, nodeLink) {

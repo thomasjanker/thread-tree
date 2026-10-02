@@ -22,6 +22,7 @@ MAX_NAME = 64
 # replayed pcap keeps its last known state. Routers advertise at least every 32 s (MLE trickle).
 PARTITION_TTL = 180.0  # a partition without leader data for this long is gone (network re-formed)
 LINK_TTL = 180.0       # a router link not re-reported for this long is stale
+BR_TTL = 600.0         # border-router flag survives Network Data copies that omit it (stable-only data)
 ROLE_LEADER, ROLE_ROUTER = "leader", "router"
 ROLE_FED, ROLE_MED, ROLE_SED = "fed", "med", "sed"
 ROLE_CHILD, ROLE_UNKNOWN = "child", "unknown"  # child: end device, type not yet known
@@ -42,6 +43,8 @@ class Node:
     last_seen: float = 0.0
     last_heard: float = 0.0  # last frame transmitted by this node itself and received by the sniffer
     last_addressed: float = 0.0  # last frame another node sent to this node (MAC destination)
+    br_seen: float = 0.0  # last time Network Data listed this node as border router
+    mac_confirmed: float = 0.0  # last own frame with its MAC address, or MAC<->RLOC16 binding
     parent_hint: int | None = None  # RLOC16 of the router this end device polls, learned from MAC data requests
     last_role: str | None = None
 
@@ -125,6 +128,8 @@ class Engine:
                 node = self.nodes[ext] = Node(id=ext, ext=ext, first_seen=ts, last_seen=ts)
             if rloc16 is not None:
                 self._bind(node, rloc16)
+            if (touch or rloc16 is not None) and ts > node.mac_confirmed:
+                node.mac_confirmed = ts  # its MAC was seen in its own frame, or tied to its RLOC16
         else:
             nid = self.rloc_index.get(rloc16)
             node = self.nodes.get(nid) if nid else None
@@ -159,6 +164,8 @@ class Engine:
             cur = into.addresses.setdefault(addr, [first, last])
             cur[0], cur[1] = min(cur[0], first), max(cur[1], last)
         into.border_router |= prov.border_router
+        into.br_seen = max(into.br_seen, prov.br_seen)
+        into.mac_confirmed = max(into.mac_confirmed, prov.mac_confirmed)
         if into.parent_hint is None:
             into.parent_hint = prov.parent_hint
         into.polls |= prov.polls
@@ -273,9 +280,10 @@ class Engine:
             self.dirty = True
 
     def on_data_request(self, ts: float, sender: Node | None, dst_rloc16: int | None,
-                        dst_ext: str | None) -> None:
+                        dst_ext: str | None, sender_by_mac: bool = False) -> None:
         """MAC data request: a sleepy end device asks its parent for pending frames, so the destination
-        of the frame is the sender's parent router."""
+        of the frame is the sender's parent router. sender_by_mac: the frame carried the sender's MAC
+        address (not its RLOC16), so a known RLOC16 under a different parent is outdated."""
         if sender is None:
             return
         sender.polls = True  # only sleepy end devices poll their parent
@@ -283,10 +291,16 @@ class Engine:
         if parent is None and dst_ext is not None:
             known = self.nodes.get(dst_ext)
             parent = known.rloc16 if known is not None else None
-        if parent is not None and A.is_valid_rloc16(parent) and A.is_router_rloc(parent):
-            if sender.parent_hint != parent:
-                sender.parent_hint = parent
-                self.dirty = True
+        if parent is None or not A.is_valid_rloc16(parent) or not A.is_router_rloc(parent):
+            return
+        if (sender_by_mac and sender.rloc16 is not None and not A.is_router_rloc(sender.rloc16)
+                and A.parent_rloc16(sender.rloc16) != parent):
+            if self.rloc_index.get(sender.rloc16) == sender.id:  # re-parented: its new RLOC16 is unknown
+                del self.rloc_index[sender.rloc16]
+            sender.rloc16 = None
+        if sender.parent_hint != parent:
+            sender.parent_hint = parent
+        self.dirty = True
 
     def on_registered_addresses(self, ts: float, sender: Node | None, addrs: list[str]) -> None:
         """Address Registration TLV of a child (MLE Parent/Child ID/Child Update Request)."""
@@ -306,13 +320,16 @@ class Engine:
             self._add_addr(node, addr, ts)
 
     def on_network_data(self, ts: float, border_router_rloc16s: set[int]) -> None:
-        """Complete Network Data seen: exactly these RLOC16s are border routers."""
+        """Network Data lists these RLOC16s as border routers. A copy can be partial (sleepy children
+        only receive the stable part), so a missing entry clears the flag only after BR_TTL."""
         for rloc16 in border_router_rloc16s:
             node = self.node_for(ts, rloc16=rloc16, touch=False)
             if node is not None:
                 node.border_router = True
+                node.br_seen = max(node.br_seen, ts)
         for node in self.nodes.values():
-            if node.rloc16 is not None and node.rloc16 not in border_router_rloc16s:
+            if (node.border_router and node.rloc16 not in border_router_rloc16s
+                    and ts - node.br_seen > BR_TTL):
                 node.border_router = False
         self.dirty = True
 
@@ -383,7 +400,7 @@ class Engine:
                 "nodes": [
                     {**{k: getattr(n, k) for k in (
                         "id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
-                        "border_router", "first_seen", "last_seen", "last_heard", "last_addressed", "parent_hint",
+                        "border_router", "br_seen", "mac_confirmed", "first_seen", "last_seen", "last_heard", "last_addressed", "parent_hint",
                         "last_role")},
                      "addresses": {a: list(t) for a, t in n.addresses.items()}}
                     for n in self.nodes.values()

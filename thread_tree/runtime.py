@@ -58,6 +58,7 @@ class Controller:
         return (self.dataset.network_key if self.dataset else None) or self.cli_key
 
     def _apply_prefix(self) -> None:
+        """The mesh-local prefix comes from the dataset; without a dataset it is learned from traffic."""
         if self.dataset and self.dataset.mesh_local_prefix is not None:
             self.engine.fixed_ml_prefix = self.dataset.mesh_local_prefix
 
@@ -99,6 +100,9 @@ class Controller:
             if self.path and self.path.exists():
                 self.path.unlink()
             self.dataset, self.origin = None, None
+            with self.engine.lock:
+                self.engine.fixed_ml_prefix = None  # do not keep classifying with the removed network's prefix
+                self.engine.dirty = True
             self.restart_capture()
             return self.config()
 

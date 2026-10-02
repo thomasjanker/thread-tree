@@ -92,6 +92,14 @@ def ext_from_link_local(addr: ipaddress.IPv6Address) -> str | None:
     return f"{iid(addr) ^ _UL_BIT:016x}"
 
 
+def mac_from_link_local(text: str | None) -> str | None:
+    """MAC address (EUI-64) behind a MAC-based link-local address; None for anything else."""
+    addr = parse_ip(text) if text else None
+    if addr is None or (int(addr) >> 118) != 0x3FA or is_rloc_iid(iid(addr)):
+        return None
+    return ext_from_link_local(addr)
+
+
 # Address types, as reported to the UI
 LINK_LOCAL = "link-local"
 RLOC = "rloc"

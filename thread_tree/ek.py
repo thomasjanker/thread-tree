@@ -46,12 +46,14 @@ FIELDS: dict[str, list[str]] = {
     "nwd_hr16": ["thread_nwd.tlv.has_route.br_16"],
     "addr_target": ["thread_address.tlv.target_eid", "thread_address.target_eid"],
     "addr_rloc": ["thread_address.tlv.rloc16", "thread_address.rloc16"],
+    "addr_ml_eid": ["thread_address.tlv.ml_eid", "thread_address.ml_eid"],
 }
 
 # MLE command IDs (Thread spec 4.5)
 MLE_ADVERTISEMENT = 4
 MLE_CHILD_ID_RESPONSE = 12  # parent -> child: carries the assigned Address16
 MLE_FROM_CHILD = (9, 11, 13)  # Parent Request, Child ID Request, Child Update Request
+MLE_CHILD_UPDATE_RESPONSE = 14  # from a child when its parent asked; from the parent otherwise
 MAC_DATA_REQUEST = 4
 
 
@@ -137,6 +139,12 @@ class Handler:
         if src16 in (0xFFFE, 0xFFFF):  # "extended address only" / broadcast marker
             src16 = None
         sender = e.on_frame(ts, ext, src16)
+        ip_src = self._one(layers, "ip_src")
+        if ext is None and src16 is not None:
+            # a link-local source is never forwarded: MAC-based link-local + short MAC source = same device
+            ll_mac = A.mac_from_link_local(ip_src)
+            if ll_mac is not None:
+                sender = e.on_frame(ts, ll_mac, src16)
         dst64 = self._one(layers, "dst64")
         dst_ext = A.normalize_ext(dst64) if dst64 else None
         dst16_text = self._one(layers, "dst16")
@@ -145,8 +153,8 @@ class Handler:
 
         if self._int(self._one(layers, "mac_cmd")) == MAC_DATA_REQUEST:
             e.on_data_poll(ts, sender)
-            e.on_data_request(ts, sender, dst16, dst_ext)
-        e.on_ip(ts, sender, self._one(layers, "ip_src"), self._one(layers, "ip_dst"))
+            e.on_data_request(ts, sender, dst16, dst_ext, sender_by_mac=ext is not None and src16 is None)
+        e.on_ip(ts, sender, ip_src, self._one(layers, "ip_dst"))
 
         mle_cmd = self._int(self._one(layers, "mle_cmd"))
         if any(self._present(layers, k) for k in ("mle_no_key", "mle_decrypt_failed", "mle_mic_failed")):
@@ -161,6 +169,13 @@ class Handler:
             rloc16 = A.parse_rloc16(rlocs[0]) if rlocs[0].lower().startswith("0x") else self._int(rlocs[0], 10)
             if rloc16 is not None:
                 e.on_address_notification(ts, targets[0], rloc16)
+                ml_iid = self._one(layers, "addr_ml_eid")  # the same device's ML-EID interface ID
+                if ml_iid and e.ml_prefix is not None:
+                    try:
+                        e.on_address_notification(ts, str(A.addr_from(e.ml_prefix, int(ml_iid.replace(":", ""), 16))),
+                                                  rloc16)
+                    except ValueError:
+                        pass
 
         if self._all(layers, "nwd_prefix"):  # complete Network Data with prefixes
             raw = (tuple(self._all(layers, "nwd_br16")), tuple(self._all(layers, "nwd_hr16")))
@@ -190,7 +205,10 @@ class Handler:
             if addr16 and dst64:
                 e.on_address_assignment(ts, A.normalize_ext(dst64), A.parse_rloc16(addr16))
 
-        if cmd in MLE_FROM_CHILD:
+        from_child = cmd in MLE_FROM_CHILD or (
+            cmd == MLE_CHILD_UPDATE_RESPONSE and src16 is not None and A.is_valid_rloc16(src16)
+            and not A.is_router_rloc(src16))  # the Source Address is a child's: the child answers its parent
+        if from_child:
             ftd = self._bool(self._one(layers, "mode_ftd"))
             idle = self._bool(self._one(layers, "mode_idle_rx"))
             if ftd is not None and idle is not None:

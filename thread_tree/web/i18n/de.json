@@ -68,6 +68,7 @@
   "online.indirect.tip": "Nie direkt gehört, aber andere Geräte schicken ihm weiter Frames. Schwächer als \"online\": ein gerade ausgefallenes Gerät wird noch eine Weile angesprochen.",
   "d.addressed": "Zuletzt angesprochen",
   "d.addressed.tip": "Letzter Frame, den ein anderes Gerät an dieses geschickt hat. Zeigt, dass es noch angesprochen wird, nicht dass es antwortet.",
+  "d.name.viarloc": "Dieses Gerät wurde seit {since} nur noch über seine Kurzadresse {rloc} gehört, ohne Frame mit seiner MAC-Adresse. Wurde die Kurzadresse inzwischen unbemerkt einem anderen Gerät zugeteilt, kann der Name jetzt beim falschen Gerät stehen. Das klärt sich, sobald das Gerät wieder einen Frame mit seiner MAC-Adresse sendet (z. B. beim erneuten Anmelden).",
   "copy": "Kopieren", "copied": "Kopiert",
   "d.parent": "Eltern", "d.children": "Kinder", "d.neighbors": "Router-Verbindungen", "d.addresses": "IPv6-Adressen",
   "d.first": "Erstmals gesehen", "d.last": "Zuletzt gesehen", "d.state": "Status", "d.mode": "Modus", "d.id": "Identität",

@@ -92,6 +92,16 @@ so nodes, roles and addresses survive restarts (nodes unseen for 30 days are pru
 Limits: only what the sniffer hears; sleepy devices appear slowly; a REED cannot be told from a FED;
 router-to-router links need that router's advertisement to reach the sniffer.
 
+## Limits of passive capture
+
+- **Same router ID in two partitions at once.** While a network re-forms (e.g. a border router restarts), two partitions
+  can coexist for a short time and use the same router ID. The short-address index is global, so the assignment flips
+  between the two devices until the partitions merge. Other Thread networks are excluded by the dataset's PAN filter.
+- **Short address reused without the sniffer noticing.** If a child re-attaches elsewhere unnoticed and its old short
+  address is given to another device, frames that carry only the short address are attributed to the old device,
+  including its name. A captured attach (Child ID Response) or any frame with the device's MAC address corrects it.
+  The detail panel says when a named device has been heard only by its short address for more than an hour.
+
 ## Verification status (honest)
 
 Verified here: engine, topology, persistence, dataset parser, address math, EK adapter logic
