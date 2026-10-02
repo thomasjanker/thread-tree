@@ -120,6 +120,30 @@ class ApiFixture:
         return res.status, data
 
 
+class DatasetSurvivesTests(unittest.TestCase):
+    """The dataset (network key) must survive a tree rebuild and a restart."""
+
+    def test_rebuild_keeps_dataset_file_key_and_prefix(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "t.sqlite.dataset"
+            engine = Engine()
+            c = Controller(engine, "run", "nrf:/dev/null", dataset_path=path, tshark="definitely-not-installed")
+            self.addCleanup(c.stop_capture)
+            c.set_dataset(dataset_hex())
+            before, stored = c.config(), path.read_text()
+            engine.on_frame(1.0, "aa" * 8, 0x0400)
+            c.rebuild_topology()
+            self.assertEqual(engine.nodes, {})
+            self.assertEqual(c.config(), before)                      # same network, key still set
+            self.assertEqual(path.read_text(), stored)                # file untouched
+            self.assertTrue(c.status()["decrypting"])
+            self.assertEqual(engine.ml_prefix, 0xFD12345678900001)    # prefix from the dataset survives
+            # and a restart finds it again
+            c2 = Controller(Engine(), "run", "nrf:/dev/null", dataset_path=path, tshark="definitely-not-installed")
+            self.addCleanup(c2.stop_capture)
+            self.assertEqual(c2.config(), before)
+
+
 class ServerTests(ApiFixture, unittest.TestCase):
     def post(self, value, **headers):
         h = {"Content-Type": "application/json", **headers}
