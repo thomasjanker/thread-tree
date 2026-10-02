@@ -24,6 +24,8 @@ function s(tag, attrs, ...kids) {
   el.append(...kids.flat(Infinity).filter(k => k != null));
   return el;
 }
+// replaceChildren() stringifies arrays and null: flatten and drop empty entries first
+const fill = (el, ...kids) => el.replaceChildren(...kids.flat(Infinity).filter(k => k != null && k !== false));
 const dict = () => state.dicts[state.lang];
 const t = key => dict()[key] ?? state.dicts.en[key] ?? key;
 function abbr(code, text) {
@@ -190,6 +192,13 @@ function findInTree(n, id) {
   for (const c of n.children) { const r = findInTree(c, id); if (r) return r; }
   return null;
 }
+// The other end of a router link; a router that was never heard has no node entry.
+function neighborLabel(n, l, nodeLink) {
+  const otherId = l.from === n.id ? l.to : l.from;
+  if (otherId && state.topo.nodes[otherId]) return nodeLink(otherId);
+  const rid = l.from === n.id ? l.to_router_id : l.from_router_id;
+  return h('span', { class: 'muted' }, `${t('placeholder.router')} 0x${(rid << 10).toString(16).padStart(4, '0')}`);
+}
 function renderDrawer() {
   const d = document.getElementById('drawer');
   const n = state.selected && state.topo?.nodes[state.selected];
@@ -201,7 +210,7 @@ function renderDrawer() {
   const nodeLink = id => { const m = state.topo.nodes[id]; return h('a', { href: '#', onclick: e => { e.preventDefault(); select(id); } }, nodeName(m) + (m.rloc16 ? ` (${m.rloc16})` : '')); };
   const links = state.topo.links.filter(l => l.from === n.id || l.to === n.id);
   const mode = n.ftd == null ? '—' : [n.ftd ? 'FTD' : 'MTD', n.rx_on_idle ? 'rx-on-idle' : 'rx-off-idle'];
-  d.replaceChildren(
+  fill(d,
     h('h2', {}, nodeName(n), roleChip(n.role), n.border_router ? abbr('BR') : null,
       h('button', { type: 'button', style: 'margin-left:auto', onclick: () => select(null), 'aria-label': t('legend.close') }, '×')),
     h('dl', {},
@@ -209,14 +218,14 @@ function renderDrawer() {
       dd(abbr('EUI-64'), h('span', { class: 'mono' }, n.ext || '—')),
       dd(abbr('RLOC16'), h('span', { class: 'mono' }, n.rloc16 || '—')),
       dd(t('d.mode'), Array.isArray(mode) ? [abbr(mode[0]), ' · ' + mode[1]] : mode),
-      dd(t('col.partition'), String(n.partition_id)),
+      dd(t('col.partition'), '0x' + Number(n.partition_id).toString(16)),
       n.parent ? dd(t('d.parent'), nodeLink(n.parent)) : [],
       dd(t('d.reach'), reachLabel(n), n.heard ? ` (${ago(n.last_heard)})` : ''),
       dd(t('d.first'), ago(n.first_seen)), dd(t('d.last'), ago(n.last_seen))),
     tn && tn.children.length ? [h('h3', {}, t('d.children')), h('div', {}, tn.children.map(c => h('div', {}, nodeLink(c.id))))] : [],
-    links.length ? [h('h3', {}, t('d.neighbors')), ...links.map(l => h('div', {}, nodeLink(l.from === n.id ? l.to : l.from),
+    links.length ? [h('h3', {}, t('d.neighbors')), ...links.map(l => h('div', {}, neighborLabel(n, l, nodeLink),
       ` — ${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${l.cost}`))] : [],
-    h('h3', {}, t('d.addresses')), addressList(n, false));
+    h('h3', {}, t('d.addresses')), ...(n.addresses.length ? addressList(n, false) : [h('div', { class: 'muted' }, '—')]));
 }
 
 // ---- legend ----------------------------------------------------------------
@@ -338,7 +347,7 @@ function render() {
   if (st?.mode === 'run' && sx.mle_failed > 0 && sx.mle_failed >= sx.mle_ok) { msg = t('banner.decrypt'); settingsLink = true; }
   if (st?.capture_error) { msg = t('banner.error') + st.capture_error; settingsLink = false; }
   banner.hidden = !msg;
-  banner.replaceChildren(...(msg ? [msg, settingsLink ? h('button', { type: 'button', style: 'margin-left:12px', onclick: openSettings }, t('settings')) : null] : []));
+  fill(banner, msg, msg && settingsLink ? h('button', { type: 'button', style: 'margin-left:12px', onclick: openSettings }, t('settings')) : null);
   pe.className = 'status' + (st && st.mode === 'run' && !st.capture_running ? ' bad' : '');
   pe.textContent = !st ? '' : st.mode === 'demo' ? t('status.demo') : st.waiting_for_dataset ? t('status.waiting') : st.capture_running ? t('status.live') : t('status.stopped');
 
@@ -358,12 +367,22 @@ function render() {
 }
 
 async function poll() {
+  const statusEl = document.getElementById('status');
   try {
     const [topo, status] = await Promise.all([fetch('/api/topology').then(r => r.json()), fetch('/api/status').then(r => r.json())]);
     state.topo = topo; state.status = status;
+  } catch (err) {
+    statusEl.textContent = '⚠'; statusEl.title = String(err);  // server unreachable
+    return;
+  }
+  try {
     if (!document.activeElement || document.activeElement.tagName !== 'INPUT') render();
     else renderDrawer();
-  } catch { document.getElementById('status').textContent = '⚠'; }
+    statusEl.title = '';
+  } catch (err) {  // a bug in the UI: say so instead of silently showing stale content
+    console.error(err);
+    statusEl.textContent = '⚠ UI'; statusEl.title = String(err);
+  }
 }
 
 async function init() {
