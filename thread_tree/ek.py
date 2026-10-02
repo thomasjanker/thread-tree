@@ -139,12 +139,13 @@ class Handler:
         sender = e.on_frame(ts, ext, src16)
         dst64 = self._one(layers, "dst64")
         dst_ext = A.normalize_ext(dst64) if dst64 else None
-        e.on_destination(ts, dst_ext)
+        dst16_text = self._one(layers, "dst16")
+        dst16 = A.parse_rloc16(dst16_text) if dst16_text else None
+        e.on_destination(ts, dst_ext, dst16)
 
         if self._int(self._one(layers, "mac_cmd")) == MAC_DATA_REQUEST:
             e.on_data_poll(ts, sender)
-            dst16 = self._one(layers, "dst16")
-            e.on_data_request(ts, sender, A.parse_rloc16(dst16) if dst16 else None, dst_ext)
+            e.on_data_request(ts, sender, dst16, dst_ext)
         e.on_ip(ts, sender, self._one(layers, "ip_src"), self._one(layers, "ip_dst"))
 
         mle_cmd = self._int(self._one(layers, "mle_cmd"))

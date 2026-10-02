@@ -41,6 +41,7 @@ class Node:
     first_seen: float = 0.0
     last_seen: float = 0.0
     last_heard: float = 0.0  # last frame transmitted by this node itself and received by the sniffer
+    last_addressed: float = 0.0  # last frame another node sent to this node (MAC destination)
     parent_hint: int | None = None  # RLOC16 of the router this end device polls, learned from MAC data requests
     last_role: str | None = None
 
@@ -167,6 +168,7 @@ class Engine:
         into.first_seen = min(into.first_seen, prov.first_seen)
         into.last_seen = max(into.last_seen, prov.last_seen)
         into.last_heard = max(into.last_heard, prov.last_heard)
+        into.last_addressed = max(into.last_addressed, prov.last_addressed)
         self.nodes.pop(prov.id, None)
         if prov.id in self.names:  # the name follows the device to its stable id
             self.names.setdefault(into.id, self.names.pop(prov.id))
@@ -188,10 +190,19 @@ class Engine:
             node.last_heard = ts
         return node
 
-    def on_destination(self, ts: float, dst_ext: str | None) -> None:
-        """A MAC address seen only as a frame destination: the device exists (not heard directly)."""
-        if dst_ext is not None and dst_ext != "ffffffffffffffff":
-            self.node_for(ts, ext=dst_ext, touch=False)
+    def on_destination(self, ts: float, dst_ext: str | None, dst_rloc16: int | None = None) -> None:
+        """MAC destination of a frame: another node addresses this one. Proves that the device exists
+        and is still being talked to, but not that it is alive (that needs its own frames)."""
+        if dst_ext == "ffffffffffffffff":
+            dst_ext = None
+        if dst_rloc16 is not None and not A.is_valid_rloc16(dst_rloc16):  # 0xffff broadcast etc.
+            dst_rloc16 = None
+        if dst_ext is None and dst_rloc16 is None:
+            return
+        # a frame carries one destination address: MAC or short, never both
+        node = self.node_for(ts, ext=dst_ext, touch=False) if dst_ext else self.node_for(ts, rloc16=dst_rloc16, touch=False)
+        if node is not None and ts > node.last_addressed:
+            node.last_addressed = ts
 
     def on_address_assignment(self, ts: float, ext: str | None, rloc16: int | None) -> None:
         """A parent told a child its new RLOC16 (Child ID Response): binds MAC address and short address."""
@@ -345,7 +356,7 @@ class Engine:
 
     def prune(self, now: float, max_age: float) -> int:
         with self.lock:
-            stale = [n.id for n in self.nodes.values() if n.last_seen < now - max_age]
+            stale = [n.id for n in self.nodes.values() if max(n.last_seen, n.last_addressed) < now - max_age]
             for nid in stale:
                 del self.nodes[nid]
                 if nid.startswith("rloc16:"):  # unstable id: its name cannot be re-attached later
@@ -372,7 +383,7 @@ class Engine:
                 "nodes": [
                     {**{k: getattr(n, k) for k in (
                         "id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
-                        "border_router", "first_seen", "last_seen", "last_heard", "parent_hint",
+                        "border_router", "first_seen", "last_seen", "last_heard", "last_addressed", "parent_hint",
                         "last_role")},
                      "addresses": {a: list(t) for a, t in n.addresses.items()}}
                     for n in self.nodes.values()

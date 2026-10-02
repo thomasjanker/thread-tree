@@ -169,3 +169,67 @@ class LinkLocalRlocTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AddressedStatusTests(unittest.TestCase):
+    """Design option C: 'last addressed' is tracked separately from the device's own activity."""
+
+    def test_destination_updates_last_addressed_only(self):
+        e = Engine()
+        e.on_destination(10.0, "ee" * 8)
+        e.on_destination(500.0, "ee" * 8)
+        n = e.nodes["ee" * 8]
+        self.assertEqual((n.last_addressed, n.last_seen, n.last_heard), (500.0, 10.0, 0.0))
+
+    def test_short_destination_and_ignored_ones(self):
+        e = Engine()
+        router = e.on_frame(1.0, "bb" * 8, 0x2400)
+        e.on_destination(50.0, None, 0x2400)
+        self.assertEqual(router.last_addressed, 50.0)
+        for dst in (0xFFFF, 0xFFFE, 0xFC00):
+            e.on_destination(60.0, None, dst)
+        e.on_destination(60.0, "ff" * 8)
+        self.assertEqual(set(e.nodes), {"bb" * 8})
+
+    def test_never_heard_device_is_online_indirect_while_addressed(self):
+        e = Engine()
+        e.on_destination(1.0, "ee" * 8)
+        e.on_destination(30_000.0, "ee" * 8)  # still addressed 8 h later
+        n = snapshot(e, now=30_001.0)["nodes"]["ee" * 8]
+        self.assertEqual((n["online"], n["online_indirect"], n["last_addressed"]), (True, True, 30_000.0))
+        n = snapshot(e, now=30_000.0 + 7 * 3600)["nodes"]["ee" * 8]  # not addressed any more
+        self.assertEqual((n["online"], n["online_indirect"]), (False, False))
+
+    def test_heard_device_is_judged_by_its_own_frames(self):
+        e = Engine()
+        e.on_frame(1.0, "ee" * 8, None)  # heard once
+        e.on_destination(30_000.0, "ee" * 8)  # only addressed since then
+        n = snapshot(e, now=30_001.0)["nodes"]["ee" * 8]
+        self.assertEqual((n["online"], n["online_indirect"]), (False, False))
+        self.assertEqual(n["last_addressed"], 30_000.0)
+
+    def test_persisted_merged_and_protects_from_pruning(self):
+        import tempfile
+        from pathlib import Path
+        from thread_tree.store import Store
+        e = Engine()
+        e.on_destination(5.0, None, 0x0401)          # provisional, addressed
+        e.on_frame(6.0, "cc" * 8, 0x0401)            # MAC learned: merged
+        self.assertEqual(e.nodes["cc" * 8].last_addressed, 5.0)
+        e.on_destination(1_000_000.0, "cc" * 8)
+        e.prune(now=1_000_001.0, max_age=3600.0)     # own activity old, but still addressed
+        self.assertIn("cc" * 8, e.nodes)
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "t.sqlite")
+            store.save(e.export_state())
+            e2 = Engine()
+            e2.load_state(store.load())
+            self.assertEqual(e2.nodes["cc" * 8].last_addressed, 1_000_000.0)
+
+    def test_ek_short_destination(self):
+        from thread_tree.ek import FIELDS, Handler
+        e = Engine()
+        e.on_frame(1.0, "bb" * 8, 0x2400)
+        Handler(e, {k: v[0] for k, v in FIELDS.items()}).handle(
+            {"timestamp": "9000", "layers": {"wpan_src16": ["0x9c00"], "wpan_dst16": ["0x2400"]}})
+        self.assertEqual(e.nodes["bb" * 8].last_addressed, 9.0)

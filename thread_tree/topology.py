@@ -14,6 +14,16 @@ OFFLINE_AFTER = {"leader": 900, "router": 900, "med": 3600, "fed": 3600, "sed": 
 _TYPE_ORDER = {A.ML_EID: 0, A.OMR: 1, A.RLOC: 2, A.ALOC: 3, A.LINK_LOCAL: 4, A.UNCLASSIFIED: 5}
 
 
+def _online(n: Node, role: str, now: float) -> dict:
+    """A device that was ever heard is judged only by its own activity. A device never heard
+    directly counts as "online (indirect)" while other nodes keep sending frames to it."""
+    limit = OFFLINE_AFTER.get(role, 3600)
+    if n.last_heard > 0:
+        return {"online": now - n.last_seen <= limit, "online_indirect": False}
+    indirect = now - max(n.last_seen, n.last_addressed) <= limit
+    return {"online": indirect, "online_indirect": indirect}
+
+
 def _node_addresses(engine: Engine, node: Node, role: str) -> list[dict]:
     prefix = engine.ml_prefix
     out: dict[str, dict] = {}
@@ -61,8 +71,8 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
                 "name": engine.names.get(n.id),
                 "role": role, "border_router": n.border_router, "partition_id": pids[n.id],
                 "ftd": n.ftd, "rx_on_idle": n.rx_on_idle,
-                "online": now - n.last_seen <= OFFLINE_AFTER.get(role, 3600),
-                "first_seen": n.first_seen, "last_seen": n.last_seen,
+                **_online(n, role, now),
+                "first_seen": n.first_seen, "last_seen": n.last_seen, "last_addressed": n.last_addressed,
                 "heard": n.last_heard > 0, "last_heard": n.last_heard,
                 "addresses": _node_addresses(engine, n, role),
             }
@@ -89,7 +99,8 @@ def _placeholder(nodes: dict, nid: str, **extra) -> None:
     nodes[nid] = {"id": nid, "ext": None, "name": None, "rloc16": None, "router_id": None, "child_id": None,
                   "parent_router_id": None,
                   "role": ROLE_UNKNOWN, "border_router": False, "partition_id": None,
-                  "ftd": None, "rx_on_idle": None, "online": False, "first_seen": 0, "last_seen": 0, "heard": False, "last_heard": 0,
+                  "ftd": None, "rx_on_idle": None, "online": False, "online_indirect": False, "first_seen": 0, "last_seen": 0, "last_addressed": 0,
+                  "heard": False, "last_heard": 0,
                   "addresses": [], "placeholder": True, **extra}
 
 
