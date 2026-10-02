@@ -52,6 +52,9 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
                 "id": n.id, "ext": n.ext,
                 "rloc16": None if n.rloc16 is None else f"0x{n.rloc16:04x}",
                 "router_id": None if n.rloc16 is None else A.router_id(n.rloc16),
+                "parent_router_id": (A.router_id(n.rloc16) if n.rloc16 is not None and not A.is_router_rloc(n.rloc16)
+                                     else A.router_id(n.parent_hint) if n.rloc16 is None and n.parent_hint is not None
+                                     else None),
                 "child_id": None if n.rloc16 is None or A.is_router_rloc(n.rloc16) else A.child_id(n.rloc16),
                 "name": engine.names.get(n.id),
                 "role": role, "border_router": n.border_router, "partition_id": pids[n.id],
@@ -82,6 +85,7 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
 
 def _placeholder(nodes: dict, nid: str, **extra) -> None:
     nodes[nid] = {"id": nid, "ext": None, "name": None, "rloc16": None, "router_id": None, "child_id": None,
+                  "parent_router_id": None,
                   "role": ROLE_UNKNOWN, "border_router": False, "partition_id": None,
                   "ftd": None, "rx_on_idle": None, "online": False, "first_seen": 0, "last_seen": 0, "heard": False, "last_heard": 0,
                   "addresses": [], "placeholder": True, **extra}
@@ -135,8 +139,8 @@ def _partition(engine: Engine, pid: int, members: list[dict], nodes: dict, links
         if m["role"] in (ROLE_LEADER, ROLE_ROUTER) or m["id"] in tree:
             continue
         parent_id = None
-        if m["rloc16"] is not None and m["child_id"] is not None:
-            prid = m["router_id"]
+        if m.get("parent_router_id") is not None:
+            prid = m["parent_router_id"]
             if prid in routers:
                 parent_id = routers[prid]["id"]
             else:
@@ -154,7 +158,7 @@ def _partition(engine: Engine, pid: int, members: list[dict], nodes: dict, links
                                      "_parent": root["id"]}
             parent_id, kind = detached_id, "unknown"
         tree[m["id"]] = {"id": m["id"], "children": [], "edge": {"kind": kind}, "_parent": parent_id}
-        if m["rloc16"] is not None and m["child_id"] is not None:
+        if m.get("parent_router_id") is not None:
             nodes[m["id"]]["parent"] = parent_id
 
     for nid, t in tree.items():

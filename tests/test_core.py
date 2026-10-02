@@ -206,6 +206,92 @@ class NameTests(unittest.TestCase):
             self.assertEqual(Store(db).load()["names"], {})  # table is re-created on open
 
 
+class InvalidAddressTests(unittest.TestCase):
+    def test_invalid_rloc16_never_creates_nodes_or_border_routers(self):
+        e = Engine()
+        e.on_network_data(1.0, {0xFFFE, 0xFC00, 0xFFFF, 0x0400})
+        self.assertEqual(set(e.nodes), {"rloc16:0400"})
+        self.assertTrue(e.nodes["rloc16:0400"].border_router)
+        for bad in (0xFFFE, 0xFFFF, 0xFC00, 0xFC01, 0xFC38):
+            self.assertIsNone(e.node_for(2.0, rloc16=bad))
+        e.on_address_notification(3.0, "fd12:3456:789a:1::5", 0xFFFE)
+        e.on_frame(4.0, None, 0xFFFE)
+        self.assertEqual(set(e.nodes), {"rloc16:0400"})
+
+    def test_invalid_rloc16_with_a_mac_keeps_the_node_without_the_short_address(self):
+        e = Engine()
+        node = e.on_frame(1.0, "aa" * 8, 0xFFFE)
+        self.assertIsNone(node.rloc16)
+        self.assertEqual(e.rloc_index, {})
+
+    def test_valid_range_edges(self):
+        self.assertTrue(A.is_valid_rloc16(0xF800 + 0x3FF))   # router id 62, last child
+        self.assertFalse(A.is_valid_rloc16(0xFC00))           # router id 63
+
+    def test_old_database_with_pseudo_nodes_is_cleaned_on_load(self):
+        state = {"nodes": [
+            {"id": "rloc16:fffe", "ext": None, "rloc16": 0xFFFE, "partition_id": None, "ftd": None,
+             "rx_on_idle": None, "polls": False, "border_router": True, "first_seen": 1, "last_seen": 1,
+             "last_heard": 0, "last_role": None, "addresses": {}},
+            {"id": "aa" * 8, "ext": "aa" * 8, "rloc16": 0xFFFE, "partition_id": None, "ftd": None,
+             "rx_on_idle": None, "polls": False, "border_router": False, "first_seen": 1, "last_seen": 1,
+             "last_heard": 1, "last_role": None, "addresses": {}}],
+            "links": [], "names": {"rloc16:fffe": "ghost", "aa" * 8: "real"}, "meta": {}}
+        e = Engine()
+        e.load_state(state)
+        self.assertEqual(set(e.nodes), {"aa" * 8})
+        self.assertIsNone(e.nodes["aa" * 8].rloc16)
+        self.assertEqual(e.names, {"aa" * 8: "real"})
+
+
+class ParentHintTests(unittest.TestCase):
+    def test_data_request_reveals_the_parent_of_a_mac_only_device(self):
+        e = Engine(ml_prefix=ML_PREFIX)
+        populate(e, now=1000.0)  # router 5 = 0x1400 exists
+        child = e.on_frame(1001.0, "ee" * 8, None)             # sleepy device known by MAC only
+        e.on_data_request(1001.0, child, 0x1400, None)
+        snap = snapshot(e, now=1002.0)
+        self.assertEqual(snap["nodes"]["ee" * 8]["parent"], "c8d1d1fffe000005")
+        self.assertEqual(snap["nodes"]["ee" * 8]["role"], "sed")  # only sleepy devices poll their parent
+        root = snap["partitions"][0]["root"]
+        under_router5 = [c for c in root["children"] if c["id"] == "c8d1d1fffe000005"][0]
+        self.assertIn("ee" * 8, [c["id"] for c in under_router5["children"]])
+
+    def test_parent_given_as_mac_of_a_known_router(self):
+        e = Engine()
+        e.on_frame(1.0, "bb" * 8, 0x2400)
+        child = e.on_frame(1.0, "ee" * 8, None)
+        e.on_data_request(1.0, child, None, "bb" * 8)
+        self.assertEqual(child.parent_hint, 0x2400)
+
+    def test_ignores_non_router_and_invalid_destinations(self):
+        e = Engine()
+        child = e.on_frame(1.0, "ee" * 8, None)
+        for dst in (0x2401, 0xFFFF, 0xFFFE, 0xFC00):
+            e.on_data_request(1.0, child, dst, None)
+        self.assertIsNone(child.parent_hint)
+
+    def test_hint_is_ignored_once_the_short_address_is_known_and_persisted(self):
+        e = Engine()
+        child = e.on_frame(1.0, "ee" * 8, None)
+        e.on_data_request(1.0, child, 0x2400, None)
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "t.sqlite")
+            store.save(e.export_state())
+            e2 = Engine()
+            e2.load_state(store.load())
+            self.assertEqual(e2.nodes["ee" * 8].parent_hint, 0x2400)
+        e.on_frame(2.0, "ee" * 8, (5 << 10) | 3)  # now heard with a real short address: it wins
+        self.assertEqual(snapshot(e, now=3.0)["nodes"]["ee" * 8]["parent_router_id"], 5)
+
+    def test_ek_data_request_with_extended_source(self):
+        e = Engine()
+        h = Handler(e, {k: v[0] for k, v in FIELDS.items()})
+        h.handle(ek(1000, wpan_src64=["ee:ee:ee:ee:ee:ee:ee:ee"], wpan_dst16=["0x2400"], wpan_cmd=["4"]))
+        node = e.nodes["ee" * 8]
+        self.assertEqual((node.parent_hint, node.polls), (0x2400, True))
+
+
 class RebuildTests(unittest.TestCase):
     def setUp(self):
         self.e = Engine()

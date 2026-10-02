@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   id TEXT PRIMARY KEY, ext TEXT, rloc16 INTEGER, partition_id INTEGER,
   ftd INTEGER, rx_on_idle INTEGER, polls INTEGER NOT NULL, border_router INTEGER NOT NULL,
   first_seen REAL NOT NULL, last_seen REAL NOT NULL, last_role TEXT,
-  last_heard REAL NOT NULL DEFAULT 0);
+  last_heard REAL NOT NULL DEFAULT 0, parent_hint INTEGER);
 CREATE TABLE IF NOT EXISTS addresses (
   node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE, addr TEXT NOT NULL,
   first_seen REAL NOT NULL, last_seen REAL NOT NULL, PRIMARY KEY (node_id, addr));
@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS links (
   last_seen REAL NOT NULL, PRIMARY KEY (src, dst));
 """
 _NODE_COLS = ("id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
-              "border_router", "first_seen", "last_seen", "last_heard", "last_role")
+              "border_router", "first_seen", "last_seen", "last_heard", "parent_hint", "last_role")
 _BOOL_COLS = ("ftd", "rx_on_idle", "polls", "border_router")
 
 
@@ -37,8 +37,11 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as db:
             db.executescript(_SCHEMA)
-            if "last_heard" not in {r[1] for r in db.execute("PRAGMA table_info(nodes)")}:
-                db.execute("ALTER TABLE nodes ADD COLUMN last_heard REAL NOT NULL DEFAULT 0")  # pre-0.1.1 DB
+            columns = {r[1] for r in db.execute("PRAGMA table_info(nodes)")}
+            if "last_heard" not in columns:
+                db.execute("ALTER TABLE nodes ADD COLUMN last_heard REAL NOT NULL DEFAULT 0")  # older DB
+            if "parent_hint" not in columns:
+                db.execute("ALTER TABLE nodes ADD COLUMN parent_hint INTEGER")  # older DB
             db.execute("INSERT OR IGNORE INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))
 
     def _connect(self) -> sqlite3.Connection:

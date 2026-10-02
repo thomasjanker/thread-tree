@@ -45,6 +45,11 @@ def child_id(rloc16: int) -> int:
     return rloc16 & 0x3FF
 
 
+def is_valid_rloc16(rloc16: int) -> bool:
+    """Router IDs are 0-62; 0xfc00 and above are ALOCs, the invalid ID 63 and the 0xfffe/0xffff markers."""
+    return 0 <= rloc16 < 0xFC00
+
+
 def is_router_rloc(rloc16: int) -> bool:
     return child_id(rloc16) == 0
 

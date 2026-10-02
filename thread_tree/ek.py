@@ -20,6 +20,7 @@ FIELDS: dict[str, list[str]] = {
     "src64": ["wpan.src64"],
     "src16": ["wpan.src16"],
     "dst64": ["wpan.dst64"],
+    "dst16": ["wpan.dst16"],
     "mle_addr16": ["mle.tlv.addr16"],
     "mac_cmd": ["wpan.cmd"],
     "ip_src": ["ipv6.src"],
@@ -73,6 +74,7 @@ class Handler:
         self.fields = fields
         # MLE messages seen, and how many could / could not be decrypted
         self.stats = {"frames": 0, "mle_ok": 0, "mle_failed": 0}
+        self._last_nwd: tuple | None = None
 
     def _all(self, layers: dict, logical: str) -> list[str]:
         name = self.fields.get(logical)
@@ -141,6 +143,8 @@ class Handler:
 
         if self._int(self._one(layers, "mac_cmd")) == MAC_DATA_REQUEST:
             e.on_data_poll(ts, sender)
+            dst16 = self._one(layers, "dst16")
+            e.on_data_request(ts, sender, A.parse_rloc16(dst16) if dst16 else None, dst_ext)
         e.on_ip(ts, sender, self._one(layers, "ip_src"), self._one(layers, "ip_dst"))
 
         mle_cmd = self._int(self._one(layers, "mle_cmd"))
@@ -158,8 +162,13 @@ class Handler:
                 e.on_address_notification(ts, targets[0], rloc16)
 
         if self._all(layers, "nwd_prefix"):  # complete Network Data with prefixes
-            brs = {self._int(v) for v in self._all(layers, "nwd_br16") + self._all(layers, "nwd_hr16")}
-            e.on_network_data(ts, {v for v in brs if v is not None})
+            raw = (tuple(self._all(layers, "nwd_br16")), tuple(self._all(layers, "nwd_hr16")))
+            if raw != self._last_nwd:  # log changes only: shows what Wireshark reports as border routers
+                self._last_nwd = raw
+                log.info("network data: prefixes=%s border_router.16=%s has_route.br_16=%s",
+                         self._all(layers, "nwd_prefix"), list(raw[0]), list(raw[1]))
+            brs = {self._int(v) for v in raw[0] + raw[1]}
+            e.on_network_data(ts, {v for v in brs if v is not None and A.is_valid_rloc16(v)})
 
     def _handle_mle(self, ts: float, layers: dict, sender, src16: int | None, cmd: int) -> None:
         e = self.engine

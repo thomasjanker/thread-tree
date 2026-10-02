@@ -37,6 +37,7 @@ class Node:
     first_seen: float = 0.0
     last_seen: float = 0.0
     last_heard: float = 0.0  # last frame transmitted by this node itself and received by the sniffer
+    parent_hint: int | None = None  # RLOC16 of the router this end device polls, learned from MAC data requests
     last_role: str | None = None
 
 
@@ -82,12 +83,16 @@ class Engine:
             return end_device_role(node)
         if node.last_role:
             return node.last_role
-        return end_device_role(node) if node.ftd is not None else ROLE_UNKNOWN
+        if node.ftd is not None or node.polls or node.parent_hint is not None:
+            return end_device_role(node)
+        return ROLE_UNKNOWN
 
     # ---- node resolution ----------------------------------------------------
 
     def node_for(self, ts: float, ext: str | None = None, rloc16: int | None = None,
                  touch: bool = True) -> Node | None:
+        if rloc16 is not None and not A.is_valid_rloc16(rloc16):
+            rloc16 = None  # 0xfffe/0xffff markers, ALOCs and the unusable router ID 63
         if ext is None and rloc16 is None:
             return None
         if ext is not None:
@@ -129,6 +134,8 @@ class Engine:
             cur = into.addresses.setdefault(addr, [first, last])
             cur[0], cur[1] = min(cur[0], first), max(cur[1], last)
         into.border_router |= prov.border_router
+        if into.parent_hint is None:
+            into.parent_hint = prov.parent_hint
         into.polls |= prov.polls
         for attr in ("partition_id", "ftd", "rx_on_idle", "last_role"):
             if getattr(into, attr) is None:
@@ -222,6 +229,22 @@ class Engine:
             node.polls = True
             self.dirty = True
 
+    def on_data_request(self, ts: float, sender: Node | None, dst_rloc16: int | None,
+                        dst_ext: str | None) -> None:
+        """MAC data request: a sleepy end device asks its parent for pending frames, so the destination
+        of the frame is the sender's parent router."""
+        if sender is None:
+            return
+        sender.polls = True  # only sleepy end devices poll their parent
+        parent = dst_rloc16
+        if parent is None and dst_ext is not None:
+            known = self.nodes.get(dst_ext)
+            parent = known.rloc16 if known is not None else None
+        if parent is not None and A.is_valid_rloc16(parent) and A.is_router_rloc(parent):
+            if sender.parent_hint != parent:
+                sender.parent_hint = parent
+                self.dirty = True
+
     def on_registered_addresses(self, ts: float, sender: Node | None, addrs: list[str]) -> None:
         """Address Registration TLV of a child (MLE Parent/Child ID/Child Update Request)."""
         if sender is None:
@@ -309,7 +332,8 @@ class Engine:
                 "nodes": [
                     {**{k: getattr(n, k) for k in (
                         "id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
-                        "border_router", "first_seen", "last_seen", "last_heard", "last_role")},
+                        "border_router", "first_seen", "last_seen", "last_heard", "parent_hint",
+                        "last_role")},
                      "addresses": {a: list(t) for a, t in n.addresses.items()}}
                     for n in self.nodes.values()
                 ],
@@ -327,13 +351,18 @@ class Engine:
         with self.lock:
             for d in state.get("nodes", []):
                 node = Node(**{**d, "addresses": {a: list(t) for a, t in d.get("addresses", {}).items()}})
+                if node.rloc16 is not None and not A.is_valid_rloc16(node.rloc16):  # written by an older version
+                    if node.ext is None:
+                        continue  # a pseudo node made of an invalid short address: drop it
+                    node.rloc16 = None
                 self.nodes[node.id] = node
                 if node.rloc16 is not None:
                     self.rloc_index[node.rloc16] = node.id
             for d in state.get("links", []):
                 self.links[(d["src"], d["dst"])] = {k: d[k] for k in ("lq_in", "lq_out", "cost", "last_seen")}
             meta = state.get("meta", {})
-            self.names = dict(state.get("names", {}))
+            self.names = {k: v for k, v in state.get("names", {}).items()
+                          if k in self.nodes or not k.startswith("rloc16:")}
             self.leaders = {int(k): v for k, v in meta.get("leaders", {}).items()}
             self.primary_partition = meta.get("primary_partition")
             self.ml_votes = Counter({int(k): v for k, v in meta.get("ml_votes", {}).items()})
