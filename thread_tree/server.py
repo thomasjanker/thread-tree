@@ -47,8 +47,9 @@ def host_name(header: str | None) -> str:
 
 
 def may_write(client_ip: str, host_header: str | None, allow_remote: bool) -> bool:
-    """Who may change the dataset: this machine (incl. SSH tunnels) addressed by a local name,
-    which also defeats DNS rebinding; others only with --allow-remote-config."""
+    """Who may change the dataset: everybody if allow_remote (the default of the CLI), otherwise only
+    this machine (incl. SSH tunnels) addressed by a local name, which also defeats DNS rebinding
+    (--local-config-only)."""
     return allow_remote or (is_loopback(client_ip) and host_name(host_header) in LOCAL_NAMES)
 
 

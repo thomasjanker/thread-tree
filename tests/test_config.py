@@ -175,7 +175,7 @@ class AccessRuleTests(unittest.TestCase):
         self.assertFalse(may_write("192.168.1.20", "raspberrypi:8787", False))  # LAN client
         self.assertFalse(may_write("127.0.0.1", "evil.example:8787", False))    # DNS rebinding
         self.assertFalse(may_write("192.168.1.20", "localhost:8787", False))    # spoofed Host
-        self.assertTrue(may_write("192.168.1.20", "raspberrypi:8787", True))    # --allow-remote-config
+        self.assertTrue(may_write("192.168.1.20", "raspberrypi:8787", True))    # default: remote entry allowed
 
 
 if __name__ == "__main__":

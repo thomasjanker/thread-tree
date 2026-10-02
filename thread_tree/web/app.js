@@ -259,6 +259,9 @@ async function openSettings() {
   renderSettings();
   document.getElementById('settings').showModal();
 }
+function insecureConnection() {  // the key would cross the network in clear text
+  return location.protocol === 'http:' && !['localhost', '127.0.0.1', '[::1]'].includes(location.hostname);
+}
 function renderSettings(message) {
   const dlg = document.getElementById('settings');
   const cfg = state.config;
@@ -309,6 +312,7 @@ function renderSettings(message) {
       h('label', { for: 'dataset-input' }, t('set.dataset')), h('div', { class: 'field' }, input),
       h('label', { class: 'inline' }, show, ' ', t('set.show')),
       h('p', { class: 'muted' }, t('set.help')), h('p', { class: 'muted' }, t('set.note')),
+      insecureConnection() ? h('p', { class: 'msg error' }, t('set.insecure')) : null,
       h('div', { class: 'toolbar' }, save, remove));
   }
   dlg.replaceChildren(h('h2', {}, t('settings')), h('h3', {}, t('set.current')), info, form, msg,

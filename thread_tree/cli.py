@@ -32,9 +32,9 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--extcap-script", default=DEFAULT_EXTCAP_SCRIPT, help="Nordic nrf802154_sniffer.py")
     run.add_argument("--dataset", help="active dataset TLVs as hex; locks the UI form (prefer env THREAD_TREE_DATASET)")
     run.add_argument("--key", help="network key as 32 hex chars (prefer env THREAD_TREE_KEY)")
-    run.add_argument("--allow-remote-config", action="store_true",
-                     help="let other machines enter the dataset in the UI (default: only this machine, "
-                          "e.g. through an SSH tunnel). The key then travels unencrypted over HTTP!")
+    run.add_argument("--local-config-only", action="store_true",
+                     help="only accept the dataset from this machine (e.g. through an SSH tunnel); by default "
+                          "any machine that can reach the UI may enter it, and the key travels unencrypted over HTTP")
     run.add_argument("--tshark", default="tshark")
     run.add_argument("--tshark-arg", action="append", default=[], help="extra tshark argument (repeatable)")
     sub.add_parser("demo", parents=[common], help="serve a simulated network (no hardware)")
@@ -77,7 +77,7 @@ def main(argv: list[str] | None = None) -> int:
                 cli_dataset=args.dataset or os.environ.get("THREAD_TREE_DATASET"),
                 cli_key=args.key or os.environ.get("THREAD_TREE_KEY"),
                 tshark=args.tshark, extra=args.tshark_arg, extcap_script=args.extcap_script,
-                allow_remote_config=args.allow_remote_config)
+                allow_remote_config=not args.local_config_only)
         except ValueError as exc:
             print(f"invalid dataset: {exc}", file=sys.stderr)
             return 2
@@ -100,10 +100,12 @@ def main(argv: list[str] | None = None) -> int:
     server = make_server(engine, args.host, args.port, controller)
     logging.info("UI: http://%s:%d/ (no authentication: keep it on a trusted network)", args.host, args.port)
     if not is_loopback(args.host):
-        logging.warning("listening on %s: anyone on the network can view the topology; "
-                        "the dataset can only be entered from this machine%s", args.host,
-                        " and, because of --allow-remote-config, from ANY machine" if
-                        getattr(args, "allow_remote_config", False) else "")
+        if controller.allow_remote_config:
+            logging.warning("listening on %s: anyone on the network can view the topology AND set the Thread "
+                            "dataset (the key is sent unencrypted); use --local-config-only to prevent that", args.host)
+        else:
+            logging.warning("listening on %s: anyone on the network can view the topology; "
+                            "the dataset can only be entered from this machine", args.host)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
