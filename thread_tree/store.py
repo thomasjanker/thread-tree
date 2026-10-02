@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS nodes (
 CREATE TABLE IF NOT EXISTS addresses (
   node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE, addr TEXT NOT NULL,
   first_seen REAL NOT NULL, last_seen REAL NOT NULL, PRIMARY KEY (node_id, addr));
+CREATE TABLE IF NOT EXISTS names (node_id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS links (
   src INTEGER NOT NULL, dst INTEGER NOT NULL, lq_in INTEGER, lq_out INTEGER, cost INTEGER,
   last_seen REAL NOT NULL, PRIMARY KEY (src, dst));
@@ -49,6 +50,8 @@ class Store:
         with self._connect() as db:  # one transaction: a crash never leaves half a state
             db.execute("DELETE FROM nodes")
             db.execute("DELETE FROM links")
+            db.execute("DELETE FROM names")
+            db.executemany("INSERT INTO names VALUES (?,?)", list(state.get("names", {}).items()))
             for n in state["nodes"]:
                 row = [None if n[c] is None else (int(n[c]) if c in _BOOL_COLS else n[c]) for c in _NODE_COLS]
                 db.execute(f"INSERT INTO nodes ({','.join(_NODE_COLS)}) VALUES ({','.join('?' * len(_NODE_COLS))})", row)
@@ -72,7 +75,9 @@ class Store:
                 nodes.append(d)
             links = [dict(r) for r in db.execute("SELECT * FROM links")]
             row = db.execute("SELECT value FROM meta WHERE key = 'engine'").fetchone()
-            return {"nodes": nodes, "links": links, "meta": json.loads(row[0]) if row else {}}
+            names = {r["node_id"]: r["name"] for r in db.execute("SELECT * FROM names")}
+            return {"nodes": nodes, "links": links, "names": names,
+                    "meta": json.loads(row[0]) if row else {}}
 
 
 class Persister(threading.Thread):

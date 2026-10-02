@@ -92,7 +92,9 @@ class ControllerTests(unittest.TestCase):
             c.clear_dataset()
 
 
-class ServerTests(unittest.TestCase):
+class ApiFixture:
+    """A running server on a free port with a demo-less engine; shared by the API test classes."""
+
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
@@ -117,6 +119,8 @@ class ServerTests(unittest.TestCase):
         data = res.read()
         return res.status, data
 
+
+class ServerTests(ApiFixture, unittest.TestCase):
     def post(self, value, **headers):
         h = {"Content-Type": "application/json", **headers}
         return self.call("POST", "/api/config/dataset", json.dumps({"dataset": value}), h)
@@ -154,6 +158,48 @@ class ServerTests(unittest.TestCase):
     def test_static_and_traversal(self):
         self.assertEqual(self.call("GET", "/")[0], 200)
         self.assertEqual(self.call("GET", "/../runtime.py")[0], 404)
+
+
+class NameApiTests(ApiFixture, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.engine.on_frame(1000.0, "aa" * 8, 0x0400)
+
+    def put(self, node_id, payload, **headers):
+        h = {"Content-Type": "application/json", **headers}
+        body = payload if isinstance(payload, str) else json.dumps(payload)
+        return self.call("PUT", f"/api/nodes/{node_id}/name", body, h)
+
+    def test_set_and_clear_name(self):
+        status, data = self.put("aa" * 8, {"name": "Flur"})
+        self.assertEqual((status, json.loads(data)), (200, {"id": "aa" * 8, "name": "Flur"}))
+        self.assertEqual(self.engine.names["aa" * 8], "Flur")
+        status, data = self.put("aa" * 8, {"name": ""})
+        self.assertEqual(json.loads(data)["name"], None)
+
+    def test_provisional_id_with_colon(self):
+        self.engine.on_frame(1000.0, None, 0x0C00)
+        status, _ = self.put("rloc16%3A0c00", {"name": "Short"})
+        self.assertEqual(status, 200)
+
+    def test_errors(self):
+        self.assertEqual(self.put("ff" * 8, {"name": "x"})[0], 404)          # unknown node
+        self.assertEqual(self.put("aa" * 8, {"name": "x" * 65})[0], 400)     # too long
+        self.assertEqual(self.put("aa" * 8, {"name": 5})[0], 400)            # not a string
+        self.assertEqual(self.put("aa" * 8, "[1]")[0], 400)                  # not an object
+        self.assertEqual(self.put("aa" * 8, "{broken")[0], 400)              # invalid JSON
+        status, _ = self.call("PUT", f"/api/nodes/{'aa' * 8}/name", json.dumps({"name": "x"}),
+                              {"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)
+
+    def test_guards_apply(self):
+        self.assertEqual(self.put("aa" * 8, {"name": "x"}, Origin="http://evil.example")[0], 403)
+        self.assertEqual(self.put("aa" * 8, {"name": "x"}, Host="evil.example:80")[0], 403)
+
+    def test_config_reports_can_name(self):
+        status, data = self.call("GET", "/api/config")
+        self.assertTrue(json.loads(data)["can_name"])
 
 
 class AccessRuleTests(unittest.TestCase):

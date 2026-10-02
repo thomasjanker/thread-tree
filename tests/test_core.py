@@ -133,6 +133,79 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(any(n.get("placeholder") for n in snap["nodes"].values()))
 
 
+class NameTests(unittest.TestCase):
+    def setUp(self):
+        self.e = Engine()
+        populate(self.e, now=1000.0)
+        self.ext = "a4c138fffe100002"
+
+    def test_name_appears_in_snapshot(self):
+        self.e.set_name(self.ext, "  Bad Sensor ")
+        self.assertEqual(snapshot(self.e, now=1001.0)["nodes"][self.ext]["name"], "Bad Sensor")
+        self.assertIsNone(snapshot(self.e, now=1001.0)["nodes"]["a4c138fffe100003"]["name"])
+
+    def test_empty_name_removes_it(self):
+        self.e.set_name(self.ext, "x")
+        self.assertIsNone(self.e.set_name(self.ext, "   "))
+        self.assertIsNone(self.e.set_name(self.ext, None))
+        self.assertNotIn(self.ext, self.e.names)
+
+    def test_validation(self):
+        with self.assertRaises(KeyError):
+            self.e.set_name("00" * 8, "nobody")
+        with self.assertRaises(ValueError):
+            self.e.set_name(self.ext, "x" * 65)
+        with self.assertRaises(ValueError):
+            self.e.set_name(self.ext, "bad\x00name")
+        with self.assertRaises(ValueError):
+            self.e.set_name(self.ext, "line\nbreak")
+        self.assertEqual(self.e.set_name(self.ext, "Küche – Lämpchen 💡"), "Küche – Lämpchen 💡")
+
+    def test_name_follows_device_when_it_re_parents(self):
+        self.e.set_name(self.ext, "Sensor")
+        self.e.on_frame(1002.0, self.ext, (9 << 10) | 9)
+        snap = snapshot(self.e, now=1003.0)
+        self.assertEqual(snap["nodes"][self.ext]["name"], "Sensor")
+        self.assertEqual(snap["nodes"][self.ext]["rloc16"], f"0x{(9 << 10) | 9:04x}")
+
+    def test_name_of_provisional_node_moves_to_the_ext_id_on_merge(self):
+        e = Engine()
+        e.on_frame(1.0, None, 0x0400)
+        e.set_name("rloc16:0400", "Mystery")
+        e.on_frame(2.0, "aabbccddeeff0011", 0x0400)
+        self.assertEqual(e.names, {"aabbccddeeff0011": "Mystery"})
+
+    def test_names_survive_pruning_of_ext_nodes_but_not_of_provisional_ones(self):
+        e = Engine()
+        e.on_frame(1.0, "aa" * 8, 0x0400)
+        e.on_frame(1.0, None, 0x0800)
+        e.set_name("aa" * 8, "Keep")
+        e.set_name("rloc16:0800", "Drop")
+        e.prune(now=10_000_000.0, max_age=60.0)
+        self.assertEqual(e.names, {"aa" * 8: "Keep"})
+        e.on_frame(10_000_001.0, "aa" * 8, 0x0400)  # device comes back
+        self.assertEqual(snapshot(e, now=10_000_002.0)["nodes"]["aa" * 8]["name"], "Keep")
+
+    def test_names_persist(self):
+        self.e.set_name(self.ext, "Persistent")
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "t.sqlite")
+            store.save(self.e.export_state())
+            e2 = Engine()
+            e2.load_state(Store(Path(d) / "t.sqlite").load())
+            self.assertEqual(snapshot(e2, now=1001.0)["nodes"][self.ext]["name"], "Persistent")
+
+    def test_old_database_without_names_table_still_loads(self):
+        import sqlite3
+        with tempfile.TemporaryDirectory() as d:
+            db = Path(d) / "old.sqlite"
+            Store(db)  # creates the schema
+            con = sqlite3.connect(db)
+            con.execute("DROP TABLE names")
+            con.commit(); con.close()
+            self.assertEqual(Store(db).load()["names"], {})  # table is re-created on open
+
+
 class SourceTests(unittest.TestCase):
     def test_nrf_command(self):
         from thread_tree.capture import nrf_command

@@ -43,6 +43,12 @@ SSH tunnel (`ssh -L 8787:localhost:8787 pi@host`, then open `http://localhost:87
 local `Host` name is required too (defeats DNS rebinding). Known limitation: the key is passed to tshark on its command
 line, so other local users of the same machine can see it in the process list.
 
+**Device names.** Select a node and type a name in the detail panel (empty = remove). Names are shown in the tree, the
+table (searchable) and the detail panel, and stored in the database. A name is bound to the node's extended address,
+so it stays with the device when it re-parents and survives pruning. A node known only by its short address (RLOC16)
+can be named too, but if that short address is reassigned the name may end up on another device; the UI says so.
+Naming follows the same access rule as the dataset (`--local-config-only` restricts it to this machine).
+
 State is stored in SQLite (`--db`, default `./thread-tree.sqlite`) every 10 s and on SIGTERM/Ctrl+C,
 so nodes, roles and addresses survive restarts (nodes unseen for 30 days are pruned).
 

@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "demo":
         populate(engine)
-        controller = Controller(engine, "demo", editable=False, locked_reason="demo")
+        controller = Controller(engine, "demo", editable=False, locked_reason="demo", allow_remote_config=True)
     else:
         if args.channel is not None and not 11 <= args.channel <= 26:
             print(f"invalid channel {args.channel}: Thread uses 11-26", file=sys.stderr)

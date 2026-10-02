@@ -84,3 +84,8 @@ dl.info dt { color: var(--muted); } dl.info dd { margin: 0; }
 .msg { min-height: 1.4em; margin: 8px 0; }
 .msg.error { color: var(--br); font-weight: 600; }
 #banner button { font-size: 12px; padding: 1px 8px; }
+
+.name-editor { margin: 4px 0 12px; }
+.name-editor label { color: var(--muted); font-size: 12px; font-weight: 600; }
+.name-editor .toolbar { margin: 4px 0; }
+.name-editor input.wide { flex: 1; min-width: 0; }

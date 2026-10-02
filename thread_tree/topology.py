@@ -53,6 +53,7 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
                 "rloc16": None if n.rloc16 is None else f"0x{n.rloc16:04x}",
                 "router_id": None if n.rloc16 is None else A.router_id(n.rloc16),
                 "child_id": None if n.rloc16 is None or A.is_router_rloc(n.rloc16) else A.child_id(n.rloc16),
+                "name": engine.names.get(n.id),
                 "role": role, "border_router": n.border_router, "partition_id": pids[n.id],
                 "ftd": n.ftd, "rx_on_idle": n.rx_on_idle,
                 "online": now - n.last_seen <= OFFLINE_AFTER.get(role, 3600),
@@ -80,7 +81,7 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
 
 
 def _placeholder(nodes: dict, nid: str, **extra) -> None:
-    nodes[nid] = {"id": nid, "ext": None, "rloc16": None, "router_id": None, "child_id": None,
+    nodes[nid] = {"id": nid, "ext": None, "name": None, "rloc16": None, "router_id": None, "child_id": None,
                   "role": ROLE_UNKNOWN, "border_router": False, "partition_id": None,
                   "ftd": None, "rx_on_idle": None, "online": False, "first_seen": 0, "last_seen": 0, "heard": False, "last_heard": 0,
                   "addresses": [], "placeholder": True, **extra}

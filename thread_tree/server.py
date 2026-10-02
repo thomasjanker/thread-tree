@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import re
 import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from .engine import Engine
 from .runtime import ConfigLocked, Controller
@@ -93,8 +94,9 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._json(200, controller.status())
             if path == "/api/config":
                 cfg = controller.config()
-                if cfg["editable"] and not may_write(self.client_address[0], self.headers.get("Host"),
-                                                     controller.allow_remote_config):
+                cfg["can_name"] = may_write(self.client_address[0], self.headers.get("Host"),
+                                            controller.allow_remote_config)
+                if cfg["editable"] and not cfg["can_name"]:
                     cfg["editable"], cfg["locked_reason"] = False, "remote"
                 return self._json(200, cfg)
             rel = "index.html" if path == "/" else path.lstrip("/")
@@ -103,12 +105,54 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._send(404, b"not found", "text/plain")
             self._send(200, target.read_bytes(), _TYPES.get(target.suffix, "application/octet-stream"))
 
-        def _config_write(self, action: str) -> None:
+        def _write_allowed(self) -> bool:
+            """Common checks for every state-changing request."""
             if not self._guard():
-                return
+                return False
             origin = self.headers.get("Origin")
             if origin and urlsplit(origin).netloc != self.headers.get("Host"):
-                return self._json(403, {"error": "forbidden origin"})
+                self._json(403, {"error": "forbidden origin"})
+                return False
+            return True
+
+        def _read_json(self) -> dict | None:
+            if not (self.headers.get("Content-Type") or "").startswith("application/json"):
+                self._json(415, {"error": "content type must be application/json"})
+                return None
+            length = int(self.headers.get("Content-Length") or 0)
+            if not 0 < length <= MAX_BODY:
+                self._json(413, {"error": "body too large or empty"})
+                return None
+            body = json.loads(self.rfile.read(length))
+            if not isinstance(body, dict):
+                raise ValueError("JSON object expected")
+            return body
+
+        def do_PUT(self):
+            if not self._write_allowed():
+                return
+            match = re.fullmatch(r"/api/nodes/([^/]+)/name", self.path.split("?", 1)[0])
+            if not match:
+                return self._json(404, {"error": "not found"})
+            if not may_write(self.client_address[0], self.headers.get("Host"), controller.allow_remote_config):
+                return self._json(403, {"error": "locked", "reason": "remote"})
+            try:
+                body = self._read_json()
+                if body is None:
+                    return
+                name = body.get("name")
+                if name is not None and not isinstance(name, str):
+                    raise ValueError("field 'name' must be a string")
+                node_id = unquote(match.group(1))
+                self._json(200, {"id": node_id, "name": engine.set_name(node_id, name)})
+            except KeyError:
+                self._json(404, {"error": "unknown node"})
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._json(400, {"error": str(exc)})
+
+        def _config_write(self, action: str) -> None:
+            if not self._write_allowed():
+                return
             if self.path.split("?", 1)[0] != "/api/config/dataset":
                 return self._json(404, {"error": "not found"})
             if controller.editable and not may_write(self.client_address[0], self.headers.get("Host"),
@@ -116,12 +160,10 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._json(403, {"error": "locked", "reason": "remote"})
             try:
                 if action == "set":
-                    if not (self.headers.get("Content-Type") or "").startswith("application/json"):
-                        return self._json(415, {"error": "content type must be application/json"})
-                    length = int(self.headers.get("Content-Length") or 0)
-                    if not 0 < length <= MAX_BODY:
-                        return self._json(413, {"error": "body too large or empty"})
-                    value = json.loads(self.rfile.read(length)).get("dataset")
+                    body = self._read_json()
+                    if body is None:
+                        return
+                    value = body.get("dataset")
                     if not isinstance(value, str):
                         raise ValueError("field 'dataset' (hex string) missing")
                     return self._json(200, controller.set_dataset(value))

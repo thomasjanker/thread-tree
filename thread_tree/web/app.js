@@ -44,8 +44,10 @@ function typeLabel(type) {
 function roleLabel(role) { return t('role.' + role); }
 function nodeName(n) {
   if (n.placeholder) return t(n.role === 'router' ? 'placeholder.router' : n.role === 'detached' ? 'placeholder.detached' : 'placeholder.' + n.role);
+  if (n.name) return n.name;
   return n.ext ? '…' + n.ext.slice(-8) : (n.rloc16 || n.id);
 }
+const hwId = n => (n.ext ? '…' + n.ext.slice(-8) : (n.rloc16 || n.id));  // identity next to a given name
 function ago(ts) {
   if (!ts) return t('never');
   const sec = Math.round(ts - Date.now() / 1000);
@@ -90,7 +92,7 @@ function glyph(n, cx, cy, r) {
 }
 function nodeCard(n, x, y, onclick) {
   const g = s('g', { class: `node${n.online || n.placeholder ? '' : ' offline'}${state.selected === n.id ? ' selected' : ''}${n.placeholder ? ' placeholder' : ''}`, transform: `translate(${x},${y})`, onclick });
-  g.append(s('title', {}, [nodeName(n), n.rloc16, roleLabel(n.role)].filter(Boolean).join(' · ')));
+  g.append(s('title', {}, [nodeName(n), n.name ? hwId(n) : null, n.rloc16, roleLabel(n.role)].filter(Boolean).join(' · ')));
   g.append(s('rect', { class: 'card', width: CARD_W, height: CARD_H, rx: 8 }));
   g.append(...glyph(n, 20, CARD_H / 2, 12));
   g.append(s('text', { x: 40, y: 16 }, nodeName(n)));
@@ -158,7 +160,7 @@ function renderMesh(p) {
 
 // ---- table view ------------------------------------------------------------
 function searchText(n) {
-  return [n.role, roleLabel(n.role), n.rloc16, n.ext, n.border_router ? 'br' : '', ...n.addresses.map(a => a.addr)].join(' ').toLowerCase();
+  return [n.name, n.role, roleLabel(n.role), n.rloc16, n.ext, n.border_router ? 'br' : '', ...n.addresses.map(a => a.addr)].join(' ').toLowerCase();
 }
 function reachLabel(n) {
   return h('span', { class: `tag reach-${n.heard ? 'direct' : 'indirect'}`, title: t(n.heard ? 'reach.direct.tip' : 'reach.indirect.tip') },
@@ -179,9 +181,9 @@ function renderTable(p) {
     const fresh = document.querySelector('#view input');  // render() replaced the element
     if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
   });
-  const head = h('tr', {}, ...['col.role', 'col.rloc16', 'col.ext', 'col.reach', 'col.addresses', 'col.seen'].map(k => h('th', {}, t(k))));
+  const head = h('tr', {}, ...['col.name', 'col.role', 'col.rloc16', 'col.ext', 'col.reach', 'col.addresses', 'col.seen'].map(k => h('th', {}, t(k))));
   const body = rows.map(n => h('tr', { class: `row${n.online ? '' : ' offline'}${state.selected === n.id ? ' selected' : ''}`, onclick: () => select(n.id) },
-    h('td', {}, roleChip(n.role), ' ', n.border_router ? abbr('BR') : null), h('td', { class: 'mono' }, n.rloc16 || '—'),
+    h('td', {}, n.name || '—'), h('td', {}, roleChip(n.role), ' ', n.border_router ? abbr('BR') : null), h('td', { class: 'mono' }, n.rloc16 || '—'),
     h('td', { class: 'mono' }, n.ext || '—'), h('td', {}, reachLabel(n)), h('td', {}, addressList(n, true)), h('td', {}, ago(n.last_seen))));
   return h('div', {}, h('div', { class: 'toolbar' }, input), h('table', {}, h('thead', {}, head), h('tbody', {}, body)));
 }
@@ -191,6 +193,24 @@ function findInTree(n, id) {
   if (n.id === id) return n;
   for (const c of n.children) { const r = findInTree(c, id); if (r) return r; }
   return null;
+}
+async function putName(id, name) {
+  const res = await fetch(`/api/nodes/${encodeURIComponent(id)}/name`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || res.status);
+}
+function nameEditor(n) {
+  if (n.placeholder) return null;
+  if (state.config && state.config.can_name === false) return h('p', { class: 'muted' }, t('d.name.locked'));
+  const msg = h('span', { class: 'msg error', role: 'status' });
+  const input = h('input', { type: 'text', maxlength: '64', value: n.name || '', placeholder: t('d.name.placeholder'), 'aria-label': t('d.name'), class: 'wide' });
+  const apply = async name => {
+    try { await putName(n.id, name); input.blur(); await poll(); } catch (err) { msg.textContent = `${t('set.error')}: ${err.message}`; }
+  };
+  input.addEventListener('keydown', e => { if (e.key === 'Enter') apply(input.value); });
+  const save = h('button', { type: 'button', onclick: () => apply(input.value) }, t('d.name.save'));
+  const clear = n.name ? h('button', { type: 'button', onclick: () => apply('') }, t('d.name.remove')) : null;
+  return h('div', { class: 'name-editor' }, h('label', {}, t('d.name')), h('div', { class: 'toolbar' }, input, save, clear),
+    n.ext ? null : h('p', { class: 'muted' }, t('d.name.noext')), msg);
 }
 // The other end of a router link; a router that was never heard has no node entry.
 function neighborLabel(n, l, nodeLink) {
@@ -213,8 +233,10 @@ function renderDrawer() {
   fill(d,
     h('h2', {}, nodeName(n), roleChip(n.role), n.border_router ? abbr('BR') : null,
       h('button', { type: 'button', style: 'margin-left:auto', onclick: () => select(null), 'aria-label': t('legend.close') }, '×')),
+    nameEditor(n),
     h('dl', {},
       dd(t('d.state'), t(n.online ? 'online' : 'offline')),
+      n.name ? dd(t('d.hwid'), h('span', { class: 'mono' }, hwId(n))) : [],
       dd(abbr('EUI-64'), h('span', { class: 'mono' }, n.ext || '—')),
       dd(abbr('RLOC16'), h('span', { class: 'mono' }, n.rloc16 || '—')),
       dd(t('d.mode'), Array.isArray(mode) ? [abbr(mode[0]), ' · ' + mode[1]] : mode),
@@ -376,8 +398,8 @@ async function poll() {
     return;
   }
   try {
+    // never rebuild the page while the user is typing in a field: it would drop the input
     if (!document.activeElement || document.activeElement.tagName !== 'INPUT') render();
-    else renderDrawer();
     statusEl.title = '';
   } catch (err) {  // a bug in the UI: say so instead of silently showing stale content
     console.error(err);
@@ -396,6 +418,7 @@ async function init() {
   document.getElementById('settings-btn').addEventListener('click', openSettings);
   document.getElementById('legend-btn').addEventListener('click', () => { renderLegend(); document.getElementById('legend').showModal(); });
   render();
+  loadConfig().then(render);
   await poll();
   setInterval(poll, 3000);
 }

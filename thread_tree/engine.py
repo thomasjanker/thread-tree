@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 
 from . import addresses as A
 
+MAX_NAME = 64
 ROLE_LEADER, ROLE_ROUTER = "leader", "router"
 ROLE_FED, ROLE_MED, ROLE_SED = "fed", "med", "sed"
 ROLE_CHILD, ROLE_UNKNOWN = "child", "unknown"  # child: end device, type not yet known
@@ -57,6 +58,9 @@ class Engine:
         self.primary_partition: int | None = None
         self.fixed_ml_prefix = ml_prefix
         self.ml_votes: Counter[int] = Counter()
+        # user-given device names, keyed by node id (the extended address: stable across re-parenting
+        # and across pruning; a name for an RLOC16-only node is dropped if that node is pruned)
+        self.names: dict[str, str] = {}
         self.dirty = False
 
     # ---- derived properties -------------------------------------------------
@@ -133,6 +137,8 @@ class Engine:
         into.last_seen = max(into.last_seen, prov.last_seen)
         into.last_heard = max(into.last_heard, prov.last_heard)
         self.nodes.pop(prov.id, None)
+        if prov.id in self.names:  # the name follows the device to its stable id
+            self.names.setdefault(into.id, self.names.pop(prov.id))
         for rloc, nid in list(self.rloc_index.items()):
             if nid == prov.id:
                 del self.rloc_index[rloc]
@@ -234,6 +240,23 @@ class Engine:
                 node.border_router = False
         self.dirty = True
 
+    def set_name(self, node_id: str, name: str | None) -> str | None:
+        """Give a device a name; an empty name removes it. Returns the stored name."""
+        with self.lock:
+            if node_id not in self.nodes:
+                raise KeyError(node_id)
+            name = (name or "").strip()
+            if len(name) > MAX_NAME:
+                raise ValueError(f"name too long (max {MAX_NAME} characters)")
+            if name and not name.isprintable():
+                raise ValueError("name contains control characters")
+            if name:
+                self.names[node_id] = name
+            else:
+                self.names.pop(node_id, None)
+            self.dirty = True
+            return self.names.get(node_id)
+
     # ---- housekeeping / persistence ----------------------------------------
 
     def prune(self, now: float, max_age: float) -> int:
@@ -241,6 +264,8 @@ class Engine:
             stale = [n.id for n in self.nodes.values() if n.last_seen < now - max_age]
             for nid in stale:
                 del self.nodes[nid]
+                if nid.startswith("rloc16:"):  # unstable id: its name cannot be re-attached later
+                    self.names.pop(nid, None)
             self.rloc_index = {r: i for r, i in self.rloc_index.items() if i in self.nodes}
             for key in [k for k, v in self.links.items() if v["last_seen"] < now - max_age]:
                 del self.links[key]
@@ -261,6 +286,7 @@ class Engine:
                     for n in self.nodes.values()
                 ],
                 "links": [{"src": s, "dst": d, **v} for (s, d), v in self.links.items()],
+                "names": dict(self.names),
                 "meta": {
                     "leaders": {str(k): v for k, v in self.leaders.items()},
                     "primary_partition": self.primary_partition,
@@ -279,6 +305,7 @@ class Engine:
             for d in state.get("links", []):
                 self.links[(d["src"], d["dst"])] = {k: d[k] for k in ("lq_in", "lq_out", "cost", "last_seen")}
             meta = state.get("meta", {})
+            self.names = dict(state.get("names", {}))
             self.leaders = {int(k): v for k, v in meta.get("leaders", {}).items()}
             self.primary_partition = meta.get("primary_partition")
             self.ml_votes = Counter({int(k): v for k, v in meta.get("ml_votes", {}).items()})
