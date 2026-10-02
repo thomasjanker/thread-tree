@@ -245,6 +245,7 @@ function renderDrawer() {
       h('button', { type: 'button', style: 'margin-left:auto', onclick: () => select(null), 'aria-label': t('legend.close') }, '×')),
     nameEditor(n),
     h('dl', {},
+      n.border_router ? dd(abbr('BR'), t('d.br').replace('{since}', ago(n.br_seen))) : [],
       dd(t('d.state'), n.online_indirect ? h('span', { title: t('online.indirect.tip') }, t('online.indirect')) : t(n.online ? 'online' : 'offline')),
       n.name ? dd(t('d.hwid'), h('span', { class: 'mono' }, hwId(n))) : [],
       dd(h('span', {}, abbr('MAC', t('d.mac')), ' / ', abbr('EUI-64')), macCell(n)),

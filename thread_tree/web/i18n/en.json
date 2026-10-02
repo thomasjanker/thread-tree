@@ -69,6 +69,7 @@
   "d.addressed": "Last addressed",
   "d.addressed.tip": "Last frame another device sent to this one. Shows it is still being talked to, not that it answers.",
   "d.name.viarloc": "Since {since} this device has only been heard by its short address {rloc}, without a frame showing its MAC address. If the short address was handed to another device in the meantime without the sniffer noticing, the name may now be shown on the wrong device. This resolves itself when the device sends a frame with its MAC address again (e.g. when it re-attaches).",
+  "d.br": "listed in Network Data, last {since}",
   "copy": "Copy", "copied": "Copied",
   "d.parent": "Parent", "d.children": "Children", "d.neighbors": "Router links", "d.addresses": "IPv6 addresses",
   "d.first": "First seen", "d.last": "Last seen", "d.state": "State", "d.mode": "Mode", "d.id": "Identity",

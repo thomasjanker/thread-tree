@@ -237,7 +237,6 @@ class AddressedStatusTests(unittest.TestCase):
 
 # ---------------------------------------------------------------- second review
 from thread_tree.ek import FIELDS, Handler  # noqa: E402
-from thread_tree.engine import BR_TTL  # noqa: E402
 
 
 def handler(e):
@@ -279,15 +278,35 @@ class RouteIsNotLinkTests(unittest.TestCase):  # B
         self.assertEqual(len(snapshot(e, now=2.0)["links"]), 1)
 
 
-class BorderRouterFlagTests(unittest.TestCase):  # C
-    def test_partial_network_data_does_not_clear_the_flag_at_once(self):
-        e = Engine()
-        e.on_frame(1.0, "bb" * 8, 0x2400)
-        e.on_network_data(10.0, {0x2400, 0x4400})
-        e.on_network_data(20.0, {0x4400})  # stable-only copy without this entry
+class BorderRouterFlagTests(unittest.TestCase):  # C, refined with real captures
+    """Real traffic: the stable copy for sleepy children listed border_router.16=['0xfffe'],
+    the complete copy border_router.16=['0xa800']."""
+
+    def feed(self, e, ts_ms, brs, hrs):
+        handler(e).handle(ek(ts_ms, wpan_src64=["bb:bb:bb:bb:bb:bb:bb:bb"], mle_cmd=["12"],
+                             thread_nwd_tlv_prefix=["fdc2:f44c:29d0:1::", "fc00::", "fdc2:f44c:29d0:2::"],
+                             thread_nwd_tlv_border_router_16=brs, thread_nwd_tlv_has_route_br_16=hrs))
+
+    def test_complete_copy_marks_the_border_router(self):
+        e = network()
+        self.feed(e, 2000, ["0xa800"], ["0xa800", "0xa800"])
+        self.assertTrue(e.nodes["rloc16:a800"].border_router)
+        self.assertNotIn("rloc16:fffe", e.nodes)
+
+    def test_stable_copy_never_clears_it_even_much_later(self):
+        e = network()
+        e.on_frame(1.0, "dd" * 8, 0xA800)
+        self.feed(e, 2000, ["0xa800"], ["0xa800", "0xa800"])
+        self.feed(e, 50_000_000, ["0xfffe"], ["0xfffe", "0xfffe"])  # half a day later
+        self.assertTrue(e.nodes["dd" * 8].border_router)
+
+    def test_complete_copy_without_it_clears_it(self):
+        e = network()
+        e.on_frame(1.0, "dd" * 8, 0xA800)
+        self.feed(e, 2000, ["0xa800"], [])
+        self.feed(e, 3000, ["0x2400"], [])  # border router moved to another device
+        self.assertFalse(e.nodes["dd" * 8].border_router)
         self.assertTrue(e.nodes["bb" * 8].border_router)
-        e.on_network_data(10.0 + BR_TTL + 1, {0x4400})  # still missing much later: no longer a BR
-        self.assertFalse(e.nodes["bb" * 8].border_router)
 
     def test_br_seen_is_persisted(self):
         import tempfile
@@ -302,8 +321,7 @@ class BorderRouterFlagTests(unittest.TestCase):  # C
             e2 = Engine()
             e2.load_state(store.load())
             self.assertEqual(e2.nodes["bb" * 8].br_seen, 10.0)
-            e2.on_network_data(20.0, set())
-            self.assertTrue(e2.nodes["bb" * 8].border_router)
+            self.assertTrue(snapshot(e2, now=11.0)["nodes"]["bb" * 8]["border_router"])
 
 
 class StaleChildRlocTests(unittest.TestCase):  # F

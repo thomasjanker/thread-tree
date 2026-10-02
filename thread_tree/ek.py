@@ -184,7 +184,9 @@ class Handler:
                 log.info("network data: prefixes=%s border_router.16=%s has_route.br_16=%s",
                          self._all(layers, "nwd_prefix"), list(raw[0]), list(raw[1]))
             brs = {self._int(v) for v in raw[0] + raw[1]}
-            e.on_network_data(ts, {v for v in brs if v is not None and A.is_valid_rloc16(v)})
+            # the stable subset (sent to sleepy children) replaces every RLOC16 with 0xfffe
+            complete = 0xFFFE not in brs
+            e.on_network_data(ts, {v for v in brs if v is not None and A.is_valid_rloc16(v)}, complete)
 
     def _handle_mle(self, ts: float, layers: dict, sender, src16: int | None, cmd: int) -> None:
         e = self.engine

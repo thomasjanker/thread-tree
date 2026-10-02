@@ -77,7 +77,7 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
                 **_online(n, role, now),
                 "first_seen": n.first_seen, "last_seen": n.last_seen, "last_addressed": n.last_addressed,
                 "heard": n.last_heard > 0, "last_heard": n.last_heard,
-                "mac_confirmed": n.mac_confirmed,
+                "mac_confirmed": n.mac_confirmed, "br_seen": n.br_seen,
                 "identity_via_rloc": bool(n.ext and n.rloc16 is not None
                                           and n.last_heard - n.mac_confirmed > IDENTITY_VIA_RLOC_AFTER),
                 "addresses": _node_addresses(engine, n, role),
@@ -108,7 +108,7 @@ def _placeholder(nodes: dict, nid: str, **extra) -> None:
                   "parent_router_id": None,
                   "role": ROLE_UNKNOWN, "border_router": False, "partition_id": None,
                   "ftd": None, "rx_on_idle": None, "online": False, "online_indirect": False, "first_seen": 0, "last_seen": 0, "last_addressed": 0,
-                  "heard": False, "last_heard": 0, "mac_confirmed": 0, "identity_via_rloc": False,
+                  "heard": False, "last_heard": 0, "mac_confirmed": 0, "br_seen": 0, "identity_via_rloc": False,
                   "addresses": [], "placeholder": True, **extra}
 
 

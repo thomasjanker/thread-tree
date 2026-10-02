@@ -22,7 +22,6 @@ MAX_NAME = 64
 # replayed pcap keeps its last known state. Routers advertise at least every 32 s (MLE trickle).
 PARTITION_TTL = 180.0  # a partition without leader data for this long is gone (network re-formed)
 LINK_TTL = 180.0       # a router link not re-reported for this long is stale
-BR_TTL = 600.0         # border-router flag survives Network Data copies that omit it (stable-only data)
 ROLE_LEADER, ROLE_ROUTER = "leader", "router"
 ROLE_FED, ROLE_MED, ROLE_SED = "fed", "med", "sed"
 ROLE_CHILD, ROLE_UNKNOWN = "child", "unknown"  # child: end device, type not yet known
@@ -319,18 +318,19 @@ class Engine:
         if node is not None:
             self._add_addr(node, addr, ts)
 
-    def on_network_data(self, ts: float, border_router_rloc16s: set[int]) -> None:
-        """Network Data lists these RLOC16s as border routers. A copy can be partial (sleepy children
-        only receive the stable part), so a missing entry clears the flag only after BR_TTL."""
+    def on_network_data(self, ts: float, border_router_rloc16s: set[int], complete: bool = True) -> None:
+        """Network Data lists these RLOC16s as border routers. complete=False for the stable subset that
+        sleepy children receive: its entries carry 0xfffe instead of RLOC16s, so it names no border
+        router and must not clear a flag. A complete copy defines the border routers exactly."""
         for rloc16 in border_router_rloc16s:
             node = self.node_for(ts, rloc16=rloc16, touch=False)
             if node is not None:
                 node.border_router = True
                 node.br_seen = max(node.br_seen, ts)
-        for node in self.nodes.values():
-            if (node.border_router and node.rloc16 not in border_router_rloc16s
-                    and ts - node.br_seen > BR_TTL):
-                node.border_router = False
+        if complete:
+            for node in self.nodes.values():
+                if node.border_router and node.rloc16 not in border_router_rloc16s:
+                    node.border_router = False
         self.dirty = True
 
     def set_name(self, node_id: str, name: str | None) -> str | None:
