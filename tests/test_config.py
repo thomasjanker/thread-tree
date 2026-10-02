@@ -202,6 +202,32 @@ class NameApiTests(ApiFixture, unittest.TestCase):
         self.assertTrue(json.loads(data)["can_name"])
 
 
+class RebuildApiTests(ApiFixture, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.engine.on_frame(1000.0, "aa" * 8, 0x0400)
+        cls.engine.set_name("aa" * 8, "Keep me")
+
+    def reset(self, body="{}", **headers):
+        h = {"Content-Type": "application/json", **headers}
+        return self.call("POST", "/api/topology/reset", body, h)
+
+    def test_reset_keeps_names(self):
+        status, data = self.reset()
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(data), {"nodes_removed": 1, "names_kept": 1, "names_dropped": 0})
+        self.assertEqual(self.engine.nodes, {})
+        self.assertEqual(self.engine.names, {"aa" * 8: "Keep me"})
+
+    def test_guards(self):
+        self.assertEqual(self.reset(Origin="http://evil.example")[0], 403)
+        self.assertEqual(self.reset(Host="evil.example:80")[0], 403)
+        status, _ = self.call("POST", "/api/topology/reset", "{}", {"Content-Type": "text/plain"})
+        self.assertEqual(status, 415)  # a plain cross-site form cannot send application/json
+        self.assertEqual(self.reset("[]")[0], 400)
+
+
 class AccessRuleTests(unittest.TestCase):
     def test_host_name(self):
         self.assertEqual(host_name("localhost:8787"), "localhost")

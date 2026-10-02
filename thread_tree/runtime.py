@@ -146,6 +146,13 @@ class Controller:
         self.stop_capture()
         self.start_capture()
 
+    def rebuild_topology(self) -> dict:
+        result = self.engine.reset_topology()
+        if self.mode == "demo":  # nothing would refill the simulated network
+            from .simulate import populate
+            populate(self.engine)
+        return result
+
     # ---- status -------------------------------------------------------------
 
     def status(self) -> dict:

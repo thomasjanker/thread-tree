@@ -206,6 +206,46 @@ class NameTests(unittest.TestCase):
             self.assertEqual(Store(db).load()["names"], {})  # table is re-created on open
 
 
+class RebuildTests(unittest.TestCase):
+    def setUp(self):
+        self.e = Engine()
+        populate(self.e, now=1000.0)
+        self.e.set_name("a4c138fffe100002", "Bad Sensor")
+        self.e.on_frame(1001.0, None, 0x7C00)  # known by short address only
+        self.e.set_name("rloc16:7c00", "Ghost")
+
+    def test_clears_topology_keeps_names_of_mac_identified_devices(self):
+        result = self.e.reset_topology()
+        self.assertEqual(result, {"nodes_removed": 13, "names_kept": 1, "names_dropped": 1})
+        self.assertEqual((self.e.nodes, self.e.links, self.e.leaders, self.e.rloc_index), ({}, {}, {}, {}))
+        self.assertEqual(self.e.names, {"a4c138fffe100002": "Bad Sensor"})
+        self.assertEqual(snapshot(self.e, now=1002.0)["nodes"], {})
+
+    def test_name_reappears_when_device_is_seen_again(self):
+        self.e.reset_topology()
+        self.e.on_frame(2000.0, "a4c138fffe100002", 0x1402)
+        self.assertEqual(snapshot(self.e, now=2001.0)["nodes"]["a4c138fffe100002"]["name"], "Bad Sensor")
+
+    def test_prefix_from_dataset_is_kept_but_learned_prefix_is_not(self):
+        self.e.reset_topology()
+        self.assertEqual(self.e.ml_prefix, ML_PREFIX)  # populate() set a fixed prefix, like a dataset does
+        e2 = Engine()
+        e2.on_ip(1.0, None, str(A.rloc_address(ML_PREFIX, 0x0400)), None)
+        self.assertEqual(e2.ml_prefix, ML_PREFIX)
+        e2.reset_topology()
+        self.assertIsNone(e2.ml_prefix)
+
+    def test_reset_is_persisted(self):
+        self.e.reset_topology()
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "t.sqlite")
+            store.save(self.e.export_state())
+            e2 = Engine()
+            e2.load_state(store.load())
+            self.assertEqual(e2.nodes, {})
+            self.assertEqual(e2.names, {"a4c138fffe100002": "Bad Sensor"})
+
+
 class SourceTests(unittest.TestCase):
     def test_nrf_command(self):
         from thread_tree.capture import nrf_command

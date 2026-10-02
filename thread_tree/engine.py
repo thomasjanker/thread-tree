@@ -267,6 +267,24 @@ class Engine:
             self.dirty = True
             return self.names.get(node_id)
 
+    def reset_topology(self) -> dict:
+        """Forget everything learned from traffic and rebuild from scratch. Names stay: they are bound
+        to MAC addresses and reappear as soon as a device is seen again; names of nodes known only by
+        their short address are dropped, because that id may belong to another device afterwards."""
+        with self.lock:
+            removed = len(self.nodes)
+            dropped = [nid for nid in self.names if nid.startswith("rloc16:")]
+            for nid in dropped:
+                del self.names[nid]
+            self.nodes.clear()
+            self.rloc_index.clear()
+            self.links.clear()
+            self.leaders.clear()
+            self.primary_partition = None
+            self.ml_votes.clear()  # a prefix from the dataset (fixed_ml_prefix) is kept
+            self.dirty = True
+            return {"nodes_removed": removed, "names_kept": len(self.names), "names_dropped": len(dropped)}
+
     # ---- housekeeping / persistence ----------------------------------------
 
     def prune(self, now: float, max_age: float) -> int:

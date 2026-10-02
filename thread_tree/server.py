@@ -174,7 +174,21 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 self._json(400, {"error": str(exc)})
 
         def do_POST(self):
+            if self.path.split("?", 1)[0] == "/api/topology/reset":
+                return self._reset_topology()
             self._config_write("set")
+
+        def _reset_topology(self) -> None:
+            if not self._write_allowed():
+                return
+            if not may_write(self.client_address[0], self.headers.get("Host"), controller.allow_remote_config):
+                return self._json(403, {"error": "locked", "reason": "remote"})
+            try:
+                if self._read_json() is None:  # requires application/json: not sendable by a plain cross-site form
+                    return
+            except (ValueError, json.JSONDecodeError) as exc:
+                return self._json(400, {"error": str(exc)})
+            self._json(200, controller.rebuild_topology())
 
         def do_DELETE(self):
             self._config_write("clear")

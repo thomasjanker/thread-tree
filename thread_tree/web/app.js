@@ -3,7 +3,7 @@
 const ROLES = ['leader', 'router', 'fed', 'med', 'sed', 'child', 'unknown'];
 const TYPES = ['rloc', 'aloc', 'ml-eid', 'omr', 'link-local'];
 const VIEWS = ['tree', 'mesh', 'table'];
-const state = { lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '' };
+const state = { notice: null, lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '' };
 
 // ---- helpers ---------------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -288,6 +288,26 @@ function abbrDesc(type) {
   return `${e[0]}. ${e[1]}`;
 }
 
+// ---- rebuild the tree ------------------------------------------------------
+let noticeTimer = null;
+function notify(text, error = false) {
+  state.notice = { text, error };
+  clearTimeout(noticeTimer);
+  noticeTimer = setTimeout(() => { state.notice = null; render(); }, 12000);
+  render();
+}
+async function rebuildTree() {
+  if (!confirm(t('rebuild.confirm'))) return;
+  try {
+    const res = await fetch('/api/topology/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.status);
+    state.selected = null;
+    await poll();
+    notify(t('rebuild.done').replace('{kept}', data.names_kept).replace('{dropped}', data.names_dropped));
+  } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
+}
+
 // ---- settings (Thread dataset) ----------------------------------------------
 async function loadConfig() {
   try { state.config = await fetch('/api/config').then(r => r.json()); } catch { /* keep old */ }
@@ -365,6 +385,10 @@ function render() {
   document.title = t('title');
   document.getElementById('legend-btn').textContent = t('legend');
   document.getElementById('settings-btn').textContent = t('settings');
+  const rb = document.getElementById('rebuild-btn');
+  rb.textContent = t('rebuild');
+  rb.title = t('rebuild.tip');
+  rb.disabled = state.config?.can_name === false;  // same access rule as naming; the server enforces it
   const views = document.getElementById('views');
   views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === state.view), onclick: () => { state.view = v; render(); } }, t('view.' + v))));
 
@@ -375,6 +399,7 @@ function render() {
   const sx = st?.stats || {};
   if (st?.mode === 'run' && sx.mle_failed > 0 && sx.mle_failed >= sx.mle_ok) { msg = t('banner.decrypt'); settingsLink = true; }
   if (st?.capture_error) { msg = t('banner.error') + st.capture_error; settingsLink = false; }
+  if (state.notice) { msg = state.notice.text; settingsLink = false; }
   banner.hidden = !msg;
   fill(banner, msg, msg && settingsLink ? h('button', { type: 'button', style: 'margin-left:12px', onclick: openSettings }, t('settings')) : null);
   pe.className = 'status' + (st && st.mode === 'run' && !st.capture_running ? ' bad' : '');
@@ -423,6 +448,7 @@ async function init() {
   langSel.addEventListener('change', () => { state.lang = langSel.value; try { localStorage.setItem('lang', state.lang); } catch { /* ignore */ } render(); renderLegend(); renderSettings(); });
   document.getElementById('partition').addEventListener('change', e => { state.partition = Number(e.target.value); render(); });
   document.getElementById('settings-btn').addEventListener('click', openSettings);
+  document.getElementById('rebuild-btn').addEventListener('click', rebuildTree);
   document.getElementById('legend-btn').addEventListener('click', () => { renderLegend(); document.getElementById('legend').showModal(); });
   render();
   loadConfig().then(render);

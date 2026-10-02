@@ -55,6 +55,11 @@ so it stays with the device when it re-parents and survives pruning. A node know
 can be named too, but if that short address is reassigned the name may end up on another device; the UI says so.
 Naming follows the same access rule as the dataset (`--local-config-only` restricts it to this machine).
 
+**Rebuild tree.** The header button clears everything learned from traffic (nodes, links, leader, learned prefix) and lets the
+network be learned again, e.g. after devices were removed or moved. Names are kept: they are tied to MAC addresses and
+reappear when a device is seen again; names of nodes known only by short address are dropped. The Thread dataset and
+the capture are not touched. Same access rule as naming.
+
 State is stored in SQLite (`--db`, default `./thread-tree.sqlite`) every 10 s and on SIGTERM/Ctrl+C,
 so nodes, roles and addresses survive restarts (nodes unseen for 30 days are pruned).
 
