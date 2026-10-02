@@ -8,7 +8,7 @@
   "banner.decrypt": "Thread messages are received but cannot be decrypted: check the network key (dataset) and that the sniffer channel matches the network.",
   "banner.error": "Capture error: ",
   "empty": "No Thread nodes seen yet. Is the sniffer on the right channel?",
-  "filter": "Filter (address, role, RLOC16…)",
+  "filter": "Filter or paste from Home Assistant (name, MAC, IPv6, RLOC16 …)",
   "col.role": "Role", "col.rloc16": "RLOC16", "col.ext": "Extended address", "col.addresses": "IPv6 addresses", "col.seen": "Last seen", "col.partition": "Partition",
   "online": "online", "offline": "offline", "never": "—",
   "col.reach": "Reception",

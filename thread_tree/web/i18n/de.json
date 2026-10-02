@@ -8,7 +8,7 @@
   "banner.decrypt": "Thread-Nachrichten werden empfangen, lassen sich aber nicht entschlüsseln: Netzwerkschlüssel (Dataset) prüfen und kontrollieren, ob der Sniffer-Kanal zum Netz passt.",
   "banner.error": "Fehler bei der Aufzeichnung: ",
   "empty": "Noch keine Thread-Knoten gesehen. Lauscht der Sniffer auf dem richtigen Kanal?",
-  "filter": "Filter (Adresse, Rolle, RLOC16 …)",
+  "filter": "Filtern oder aus Home Assistant einfügen (Name, MAC, IPv6, RLOC16 …)",
   "col.role": "Rolle", "col.rloc16": "RLOC16", "col.ext": "Erweiterte Adresse", "col.addresses": "IPv6-Adressen", "col.seen": "Zuletzt gesehen", "col.partition": "Partition",
   "online": "online", "offline": "offline", "never": "—",
   "col.reach": "Empfang",

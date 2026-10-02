@@ -179,7 +179,7 @@ function addressList(n, compact) {
 }
 function renderTable(p) {
   const rows = Object.values(state.topo.nodes).filter(n => !n.placeholder && n.partition_id === p.id)
-    .filter(n => !state.filter || searchText(n).includes(state.filter.toLowerCase()))
+    .filter(n => matchesQuery(n, state.filter, searchText(n)))
     .sort((a, b) => (a.rloc16 || '~').localeCompare(b.rloc16 || '~'));
   const input = h('input', { type: 'search', placeholder: t('filter'), value: state.filter, 'aria-label': t('filter') });
   input.addEventListener('input', () => {
@@ -187,7 +187,8 @@ function renderTable(p) {
     const fresh = document.querySelector('#view input');  // render() replaced the element
     if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
   });
-  const head = h('tr', {}, ...['col.name', 'col.role', 'col.rloc16', 'col.mac', 'col.reach', 'col.addresses', 'col.seen'].map(k => h('th', {}, t(k))));
+  const head = h('tr', {}, ...['col.name', 'col.role', 'col.rloc16', 'col.mac', 'col.reach', 'col.addresses', 'col.seen'].map(k =>
+    h('th', {}, k === 'col.mac' ? [abbr('MAC'), ' / ', abbr('EUI-64')] : k === 'col.rloc16' ? abbr('RLOC16') : t(k))));
   const body = rows.map(n => h('tr', { class: `row${n.online ? '' : ' offline'}${state.selected === n.id ? ' selected' : ''}`, onclick: () => select(n.id) },
     h('td', {}, n.name || '—'), h('td', {}, roleChip(n.role), ' ', n.border_router ? abbr('BR') : null), h('td', { class: 'mono' }, n.rloc16 || '—'),
     h('td', {}, macCell(n)), h('td', {}, reachLabel(n)), h('td', {}, addressList(n, true)), h('td', {}, ago(n.last_seen))));

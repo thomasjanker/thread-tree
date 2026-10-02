@@ -43,6 +43,12 @@ SSH tunnel (`ssh -L 8787:localhost:8787 pi@host`, then open `http://localhost:87
 local `Host` name is required too (defeats DNS rebinding). Known limitation: the key is passed to tshark on its command
 line, so other local users of the same machine can see it in the process list.
 
+**Matching devices with Home Assistant (or any other tool).** The table's filter box accepts what Home Assistant shows
+under "Matter info": a MAC address (8 bytes = Thread EUI-64, or 6 bytes = Ethernet/Wi-Fi) in any notation (`:`, `-`, none,
+upper or lower case) and IPv6 addresses in any notation. A 6-byte MAC also finds nodes that have the matching SLAAC
+address (modified EUI-64). Then name the node. Note: a Matter bridge that HA reaches over Ethernet (e.g. DIRIGERA) shows
+its *Ethernet* MAC there, which is not its Thread radio's EUI-64; match such devices by IPv6 prefix or by hand.
+
 **Device names.** Select a node and type a name in the detail panel (empty = remove). Names are shown in the tree, the
 table (searchable) and the detail panel, and stored in the database. A name is bound to the node's extended address,
 so it stays with the device when it re-parents and survives pruning. A node known only by its short address (RLOC16)
