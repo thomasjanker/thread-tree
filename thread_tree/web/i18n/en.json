@@ -45,7 +45,7 @@
   "set.removed": "Dataset removed.",
   "set.error": "Error",
   "set.locked.cli": "The dataset was given on the command line or in the environment (THREAD_TREE_DATASET) and cannot be changed here.",
-  "set.locked.remote": "Entering a key is disabled because the server is reachable from the network over plain HTTP. Use an SSH tunnel to localhost, or start with --allow-remote-config on a trusted network.",
+  "set.locked.remote": "The dataset (it contains the network key) can only be entered from the machine running Thread Tree, because this page is served over plain HTTP. Use an SSH tunnel (ssh -L 8787:localhost:8787 user@host) and open http://localhost:8787, or start with --allow-remote-config on a trusted network.",
   "set.locked.demo": "Demo mode: no real network.",
   "copy": "Copy", "copied": "Copied",
   "d.parent": "Parent", "d.children": "Children", "d.neighbors": "Router links", "d.addresses": "IPv6 addresses",

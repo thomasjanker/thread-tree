@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import socket
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -24,26 +25,39 @@ _TYPES = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=
           ".svg": "image/svg+xml"}
 
 
+LOCAL_NAMES = {"localhost", "127.0.0.1", "::1"}
+
+
 def is_loopback(host: str) -> bool:
     if host == "localhost":
         return True
     try:
-        return ipaddress.ip_address(host).is_loopback
+        ip = ipaddress.ip_address(host)
     except ValueError:
         return False
+    return (getattr(ip, "ipv4_mapped", None) or ip).is_loopback
+
+
+def host_name(header: str | None) -> str:
+    """Host header without port and brackets."""
+    if not header:
+        return ""
+    name = header[: header.find("]") + 1] if header.startswith("[") else header.rsplit(":", 1)[0]
+    return name.strip("[]").lower()
+
+
+def may_write(client_ip: str, host_header: str | None, allow_remote: bool) -> bool:
+    """Who may change the dataset: this machine (incl. SSH tunnels) addressed by a local name,
+    which also defeats DNS rebinding; others only with --allow-remote-config."""
+    return allow_remote or (is_loopback(client_ip) and host_name(host_header) in LOCAL_NAMES)
 
 
 def make_server(engine: Engine, host: str, port: int, controller: Controller) -> ThreadingHTTPServer:
     # On a loopback bind only local names are valid Host values; otherwise names are unknown.
-    allowed_hosts = {"localhost", "127.0.0.1", "::1"} if is_loopback(host) else None
+    bound_to_loopback = is_loopback(host)
 
     def host_ok(header: str | None) -> bool:
-        if allowed_hosts is None:
-            return True
-        if not header:
-            return False
-        name = header.rsplit(":", 1)[0] if not header.startswith("[") else header[: header.find("]") + 1]
-        return name.strip("[]").lower() in allowed_hosts
+        return not bound_to_loopback or host_name(header) in LOCAL_NAMES
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):  # quiet: never log request data
@@ -77,7 +91,11 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
             if path == "/api/status":
                 return self._json(200, controller.status())
             if path == "/api/config":
-                return self._json(200, controller.config())
+                cfg = controller.config()
+                if cfg["editable"] and not may_write(self.client_address[0], self.headers.get("Host"),
+                                                     controller.allow_remote_config):
+                    cfg["editable"], cfg["locked_reason"] = False, "remote"
+                return self._json(200, cfg)
             rel = "index.html" if path == "/" else path.lstrip("/")
             target = (WEB_DIR / rel).resolve()
             if WEB_DIR.resolve() not in target.parents or not target.is_file():
@@ -92,6 +110,9 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._json(403, {"error": "forbidden origin"})
             if self.path.split("?", 1)[0] != "/api/config/dataset":
                 return self._json(404, {"error": "not found"})
+            if controller.editable and not may_write(self.client_address[0], self.headers.get("Host"),
+                                                     controller.allow_remote_config):
+                return self._json(403, {"error": "locked", "reason": "remote"})
             try:
                 if action == "set":
                     if not (self.headers.get("Content-Type") or "").startswith("application/json"):
@@ -115,4 +136,7 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
         def do_DELETE(self):
             self._config_write("clear")
 
-    return ThreadingHTTPServer((host, port), Handler)
+    class Server(ThreadingHTTPServer):
+        address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+    return Server((host, port), Handler)

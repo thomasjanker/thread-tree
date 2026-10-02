@@ -9,7 +9,7 @@ from pathlib import Path
 
 from thread_tree.engine import Engine
 from thread_tree.runtime import ConfigLocked, Controller
-from thread_tree.server import make_server
+from thread_tree.server import host_name, is_loopback, make_server, may_write
 
 KEY = "00112233445566778899aabbccddeeff"
 
@@ -138,6 +138,8 @@ class ServerTests(unittest.TestCase):
 
     def test_rejects_foreign_host_and_origin(self):
         status, _ = self.call("GET", "/api/config", headers={"Host": "evil.example:80"})
+        self.assertEqual(status, 403)  # loopback-bound server: rebinding names are refused everywhere
+        status, _ = self.post(dataset_hex(), Host="evil.example:80")
         self.assertEqual(status, 403)
         status, _ = self.post(dataset_hex(), Origin="http://evil.example")
         self.assertEqual(status, 403)
@@ -152,6 +154,28 @@ class ServerTests(unittest.TestCase):
     def test_static_and_traversal(self):
         self.assertEqual(self.call("GET", "/")[0], 200)
         self.assertEqual(self.call("GET", "/../runtime.py")[0], 404)
+
+
+class AccessRuleTests(unittest.TestCase):
+    def test_host_name(self):
+        self.assertEqual(host_name("localhost:8787"), "localhost")
+        self.assertEqual(host_name("[::1]:8787"), "::1")
+        self.assertEqual(host_name("192.168.1.5"), "192.168.1.5")
+        self.assertEqual(host_name(None), "")
+
+    def test_loopback_detection(self):
+        for ip in ("127.0.0.1", "::1", "localhost", "::ffff:127.0.0.1"):
+            self.assertTrue(is_loopback(ip), ip)
+        for ip in ("0.0.0.0", "::", "192.168.1.5", "example.org"):
+            self.assertFalse(is_loopback(ip), ip)
+
+    def test_who_may_write(self):
+        self.assertTrue(may_write("127.0.0.1", "localhost:8787", False))      # SSH tunnel
+        self.assertTrue(may_write("::1", "[::1]:8787", False))
+        self.assertFalse(may_write("192.168.1.20", "raspberrypi:8787", False))  # LAN client
+        self.assertFalse(may_write("127.0.0.1", "evil.example:8787", False))    # DNS rebinding
+        self.assertFalse(may_write("192.168.1.20", "localhost:8787", False))    # spoofed Host
+        self.assertTrue(may_write("192.168.1.20", "raspberrypi:8787", True))    # --allow-remote-config
 
 
 if __name__ == "__main__":

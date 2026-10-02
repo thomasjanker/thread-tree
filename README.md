@@ -19,7 +19,7 @@ python3 -m unittest discover -s tests  # tests
 With hardware (needs `tshark` from Wireshark; nothing else, no Python dependencies):
 
 ```sh
-python3 -m thread_tree run --source nrf:/dev/ttyACM0     # then open the UI -> Settings -> enter the dataset
+python3 -m thread_tree run --source nrf:/dev/ttyACM0     # then open the UI (via SSH tunnel) -> Settings -> enter the dataset
 python3 -m thread_tree run --source nrf:/dev/ttyACM0 --channel 17
 python3 -m thread_tree run --source iface:<nrf-sniffer-interface>
 python3 -m thread_tree run --source pcap:capture.pcapng   # replay
@@ -34,11 +34,13 @@ network -> More options -> copy dataset; or `ot-ctl dataset active -x`). Saving 
 give it on startup via `THREAD_TREE_DATASET` (preferred over `--dataset`, keeps it out of shell history); then the form
 is read-only. The key is never returned by the API. Without a key only MAC-level data is visible; the UI says so.
 
-Security notes: the server binds to localhost without authentication. Entering a key in the UI is only allowed on a
-loopback bind (use an SSH tunnel: `ssh -L 8787:localhost:8787 pi@host`), unless `--allow-remote-config` is given.
-Config requests need `Content-Type: application/json`, a local `Host` and a matching `Origin` (guards against other
-web pages and DNS rebinding). Known limitation: the key is passed to tshark on its command line, so other local users
-of the same machine can see it in the process list.
+Security notes: the web server listens on all IPv4 interfaces by default (`--host 0.0.0.0`; `--host ::` for IPv6,
+`--host 127.0.0.1` for this machine only) and has **no authentication**: anyone on the network can view the topology.
+Entering or removing the dataset is only accepted from the machine itself, addressed as localhost (use an SSH tunnel:
+`ssh -L 8787:localhost:8787 pi@host`, then open `http://localhost:8787`), unless `--allow-remote-config` is given; the key
+then travels unencrypted. Config requests also need `Content-Type: application/json` and a matching `Origin` (guards
+against other web pages; the local-name rule defeats DNS rebinding). Known limitation: the key is passed to tshark on its
+command line, so other local users of the same machine can see it in the process list.
 
 State is stored in SQLite (`--db`, default `./thread-tree.sqlite`) every 10 s and on SIGTERM/Ctrl+C,
 so nodes, roles and addresses survive restarts (nodes unseen for 30 days are pruned).

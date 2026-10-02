@@ -30,10 +30,11 @@ class Controller:
                  dataset_path: Path | None = None, cli_dataset: str | None = None,
                  cli_key: str | None = None, tshark: str = "tshark", extra: list[str] | None = None,
                  extcap_script: str = DEFAULT_EXTCAP_SCRIPT, editable: bool = True,
-                 locked_reason: str | None = None):
+                 locked_reason: str | None = None, allow_remote_config: bool = False):
         self.engine, self.mode, self.source, self.channel = engine, mode, source, channel
         self.path, self.tshark, self.extra, self.extcap_script = dataset_path, tshark, extra, extcap_script
         self.cli_key = cli_key
+        self.allow_remote_config = allow_remote_config  # UI may change the dataset from other machines
         self.lock = threading.RLock()
         self.capture: CaptureThread | None = None
         self.dataset: Dataset | None = None

@@ -45,7 +45,7 @@
   "set.removed": "Dataset entfernt.",
   "set.error": "Fehler",
   "set.locked.cli": "Das Dataset wurde über die Kommandozeile oder die Umgebung (THREAD_TREE_DATASET) vorgegeben und kann hier nicht geändert werden.",
-  "set.locked.remote": "Die Schlüsseleingabe ist deaktiviert, weil der Server per unverschlüsseltem HTTP im Netz erreichbar ist. SSH-Tunnel auf localhost verwenden oder auf einem vertrauenswürdigen Netz mit --allow-remote-config starten.",
+  "set.locked.remote": "Das Dataset (es enthält den Netzwerkschlüssel) kann nur direkt auf dem Rechner eingegeben werden, auf dem Thread Tree läuft, weil diese Seite unverschlüsselt per HTTP ausgeliefert wird. SSH-Tunnel verwenden (ssh -L 8787:localhost:8787 user@host) und http://localhost:8787 öffnen, oder auf einem vertrauenswürdigen Netz mit --allow-remote-config starten.",
   "set.locked.demo": "Demo-Modus: kein echtes Netzwerk.",
   "copy": "Kopieren", "copied": "Kopiert",
   "d.parent": "Eltern", "d.children": "Kinder", "d.neighbors": "Router-Verbindungen", "d.addresses": "IPv6-Adressen",
