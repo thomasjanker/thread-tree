@@ -63,6 +63,7 @@
   "rebuild.tip": "Gelernte Knoten und Verbindungen vergessen und das Netz neu lernen; Namen bleiben erhalten",
   "rebuild.confirm": "Baum neu aufbauen?\n\nAlle gelernten Knoten, Verbindungen und Adressen werden gelöscht und aus dem laufenden Funkverkehr neu gelernt. Router erscheinen nach Minuten wieder, schlafende Geräte können deutlich länger brauchen.\n\nNamen bleiben erhalten (sie hängen an der MAC-Adresse und erscheinen wieder, sobald das Gerät erneut gesehen wird). Das Thread-Dataset bleibt unverändert.",
   "rebuild.done": "Baum geleert, wird aus dem laufenden Funkverkehr neu aufgebaut. Namen behalten: {kept}; verworfen: {dropped} (Geräte, die nur über die Kurzadresse bekannt waren).",
+  "link.stale": "veraltet",
   "copy": "Kopieren", "copied": "Kopiert",
   "d.parent": "Eltern", "d.children": "Kinder", "d.neighbors": "Router-Verbindungen", "d.addresses": "IPv6-Adressen",
   "d.first": "Erstmals gesehen", "d.last": "Zuletzt gesehen", "d.state": "Status", "d.mode": "Modus", "d.id": "Identität",

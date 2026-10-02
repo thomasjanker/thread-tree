@@ -42,10 +42,12 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
         pids: dict[str, int] = {}
         default_pid = engine.primary_partition if engine.primary_partition is not None else 0
         for n in engine.nodes.values():
-            pid = n.partition_id
+            # a partition that stopped sending leader data is gone: its nodes belong to the current one
+            pid = n.partition_id if engine.is_current_partition(n.partition_id) else None
             if pid is None and n.rloc16 is not None and not A.is_router_rloc(n.rloc16):
                 parent = engine.nodes.get(engine.rloc_index.get(A.parent_rloc16(n.rloc16), ""))
-                pid = parent.partition_id if parent else None
+                if parent is not None and engine.is_current_partition(parent.partition_id):
+                    pid = parent.partition_id
             pids[n.id] = pid if pid is not None else default_pid
             role = roles[n.id]
             nodes[n.id] = {
@@ -71,9 +73,9 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
             for (pid, rid), nid in by_rid.items():
                 if rid == src:
                     links.append({"from": nid, "to": by_rid.get((pid, dst)), "from_router_id": src,
-                                  "to_router_id": dst, **m})
+                                  "to_router_id": dst, "stale": not engine.link_is_fresh(m), **m})
         partitions = []
-        for pid in sorted(set(pids.values()) | set(engine.leaders)):
+        for pid in sorted(set(pids.values()) | {p for p in engine.leaders if engine.is_current_partition(p)}):
             members = [nodes[i] for i in nodes if nodes[i]["partition_id"] == pid]
             partitions.append(_partition(engine, pid, members, nodes, engine.links))
         return {
@@ -107,11 +109,10 @@ def _partition(engine: Engine, pid: int, members: list[dict], nodes: dict, links
     # Routers form a mesh: span it with the best-quality shortest paths from the leader.
     adjacency: dict[int, list[tuple[int, float, int]]] = {rid: [] for rid in routers}
     for (a, b), m in links.items():
-        if a in routers and b in routers:
-            lqs = [q for q in (m["lq_in"], m["lq_out"]) if q > 0]
-            if not lqs:
-                continue
-            lq = min(lqs)
+        if a in routers and b in routers and engine.link_is_fresh(m):
+            if m["lq_in"] <= 0 or m["lq_out"] <= 0:
+                continue  # a link needs both directions; 0 = not heard / route only
+            lq = min(m["lq_in"], m["lq_out"])
             w = 1 + (3 - lq) * 0.2
             adjacency[a].append((b, w, lq))
             adjacency[b].append((a, w, lq))

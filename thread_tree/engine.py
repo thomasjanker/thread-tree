@@ -18,6 +18,10 @@ from dataclasses import dataclass, field
 from . import addresses as A
 
 MAX_NAME = 64
+# Freshness, measured on the capture's own clock (latest observed timestamp), so a paused capture or a
+# replayed pcap keeps its last known state. Routers advertise at least every 32 s (MLE trickle).
+PARTITION_TTL = 180.0  # a partition without leader data for this long is gone (network re-formed)
+LINK_TTL = 180.0       # a router link not re-reported for this long is stale
 ROLE_LEADER, ROLE_ROUTER = "leader", "router"
 ROLE_FED, ROLE_MED, ROLE_SED = "fed", "med", "sed"
 ROLE_CHILD, ROLE_UNKNOWN = "child", "unknown"  # child: end device, type not yet known
@@ -56,7 +60,9 @@ class Engine:
         self.rloc_index: dict[int, str] = {}
         self.links: dict[tuple[int, int], dict] = {}  # (src router id, dst router id) -> metrics
         self.leaders: dict[int, int] = {}  # partition id -> leader router id
+        self.partition_seen: dict[int, float] = {}  # partition id -> last leader data
         self.primary_partition: int | None = None
+        self.clock = 0.0  # latest observation timestamp
         self.fixed_ml_prefix = ml_prefix
         self.ml_votes: Counter[int] = Counter()
         # user-given device names, keyed by node id (the extended address: stable across re-parenting
@@ -74,14 +80,31 @@ class Engine:
             return self.ml_votes.most_common(1)[0][0]
         return None
 
+    def is_current_partition(self, pid: int | None) -> bool:
+        if pid is None:
+            return False
+        if not self.partition_seen:  # state written before partitions had timestamps
+            return pid in self.leaders
+        seen = self.partition_seen.get(pid)
+        return seen is not None and seen >= max(self.partition_seen.values()) - PARTITION_TTL
+
+    def partition_of(self, node: Node) -> int | None:
+        """The node's partition if it is still current, otherwise the primary one."""
+        return node.partition_id if self.is_current_partition(node.partition_id) else self.primary_partition
+
+    def link_is_fresh(self, link: dict) -> bool:
+        return link["last_seen"] >= self.clock - LINK_TTL
+
     def role_of(self, node: Node) -> str:
         if node.rloc16 is not None:
             if A.is_router_rloc(node.rloc16):
-                pid = node.partition_id if node.partition_id is not None else self.primary_partition
+                pid = self.partition_of(node)
                 leader = self.leaders.get(pid) if pid is not None else None
                 return ROLE_LEADER if leader == A.router_id(node.rloc16) else ROLE_ROUTER
             return end_device_role(node)
-        if node.last_role:
+        # Without a current RLOC16 a node cannot be shown as router/leader: its router ID may now
+        # belong to another device, or it became an end device whose new address is not known yet.
+        if node.last_role and node.last_role not in (ROLE_LEADER, ROLE_ROUTER):
             return node.last_role
         if node.ftd is not None or node.polls or node.parent_hint is not None:
             return end_device_role(node)
@@ -110,6 +133,7 @@ class Engine:
                 self.rloc_index[rloc16] = node.id
         if touch and ts > node.last_seen:
             node.last_seen = ts
+        self.clock = max(self.clock, ts)
         self.dirty = True
         return node
 
@@ -186,7 +210,10 @@ class Engine:
             self._vote_prefix(addr)
             kind = A.classify(addr, self.ml_prefix)
             if kind == A.LINK_LOCAL:
-                self.node_for(ts, ext=A.ext_from_link_local(addr), touch=is_src)
+                if A.is_rloc_iid(A.iid(addr)):  # fe80::ff:fe00:xxxx is built from the RLOC16, not the MAC
+                    self.node_for(ts, rloc16=A.iid(addr) & 0xFFFF, touch=is_src)
+                else:
+                    self.node_for(ts, ext=A.ext_from_link_local(addr), touch=is_src)
             elif kind == A.RLOC:
                 self.node_for(ts, rloc16=A.iid(addr) & 0xFFFF, touch=is_src)
             elif (is_src and kind in (A.ML_EID, A.OMR) and sender is not None
@@ -200,7 +227,11 @@ class Engine:
     def on_leader_data(self, ts: float, sender: Node | None, partition_id: int,
                        leader_router_id: int) -> None:
         self.leaders[partition_id] = leader_router_id
-        self.primary_partition = partition_id
+        self.partition_seen[partition_id] = max(self.partition_seen.get(partition_id, ts), ts)
+        self.clock = max(self.clock, ts)
+        # stay with the primary partition while it is alive: no flapping between concurrent partitions
+        if not self.is_current_partition(self.primary_partition):
+            self.primary_partition = partition_id
         if sender is not None:
             sender.partition_id = partition_id
         self.dirty = True
@@ -217,6 +248,7 @@ class Engine:
         for rid, lq_in, lq_out, cost in entries:
             if rid != src:
                 self.links[(src, rid)] = {"lq_in": lq_in, "lq_out": lq_out, "cost": cost, "last_seen": ts}
+        self.clock = max(self.clock, ts)
         self.dirty = True
 
     def on_mode(self, ts: float, node: Node | None, ftd: bool, rx_on_idle: bool) -> None:
@@ -303,6 +335,7 @@ class Engine:
             self.rloc_index.clear()
             self.links.clear()
             self.leaders.clear()
+            self.partition_seen.clear()
             self.primary_partition = None
             self.ml_votes.clear()  # a prefix from the dataset (fixed_ml_prefix) is kept
             self.dirty = True
@@ -320,12 +353,19 @@ class Engine:
             self.rloc_index = {r: i for r, i in self.rloc_index.items() if i in self.nodes}
             for key in [k for k, v in self.links.items() if v["last_seen"] < now - max_age]:
                 del self.links[key]
+            for pid in [p for p, seen in self.partition_seen.items() if seen < now - max_age]:
+                del self.partition_seen[pid]
+                self.leaders.pop(pid, None)
             if stale:
                 self.dirty = True
             return len(stale)
 
-    def export_state(self) -> dict:
+    def export_state(self, clear_dirty: bool = False) -> dict:
+        """clear_dirty: reset the change flag atomically with the export, so a change made right
+        after it is saved next time instead of being lost."""
         with self.lock:
+            if clear_dirty:
+                self.dirty = False
             for node in self.nodes.values():
                 node.last_role = self.role_of(node)
             return {
@@ -341,6 +381,8 @@ class Engine:
                 "names": dict(self.names),
                 "meta": {
                     "leaders": {str(k): v for k, v in self.leaders.items()},
+                    "partition_seen": {str(k): v for k, v in self.partition_seen.items()},
+                    "clock": self.clock,
                     "primary_partition": self.primary_partition,
                     "ml_votes": {str(k): v for k, v in self.ml_votes.items()},
                     "fixed_ml_prefix": self.fixed_ml_prefix,
@@ -364,6 +406,8 @@ class Engine:
             self.names = {k: v for k, v in state.get("names", {}).items()
                           if k in self.nodes or not k.startswith("rloc16:")}
             self.leaders = {int(k): v for k, v in meta.get("leaders", {}).items()}
+            self.partition_seen = {int(k): v for k, v in meta.get("partition_seen", {}).items()}
+            self.clock = meta.get("clock", 0.0)
             self.primary_partition = meta.get("primary_partition")
             self.ml_votes = Counter({int(k): v for k, v in meta.get("ml_votes", {}).items()})
             if self.fixed_ml_prefix is None:  # a dataset given on the command line wins

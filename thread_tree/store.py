@@ -100,9 +100,12 @@ class Persister(threading.Thread):
     def flush(self) -> None:
         self.engine.prune(time.time(), self.retention)
         if self.engine.dirty:
-            state = self.engine.export_state()
-            self.engine.dirty = False
-            self.store.save(state)
+            state = self.engine.export_state(clear_dirty=True)
+            try:
+                self.store.save(state)
+            except Exception:
+                self.engine.dirty = True  # retry on the next flush
+                raise
 
     def stop(self) -> None:
         self._stop_evt.set()

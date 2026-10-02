@@ -63,6 +63,7 @@
   "rebuild.tip": "Forget the learned nodes and links and learn the network again; names are kept",
   "rebuild.confirm": "Rebuild the tree?\n\nAll learned nodes, links and addresses are cleared and learned again from live traffic. Routers reappear within minutes, sleepy devices can take much longer.\n\nNames are kept (they are tied to the MAC address and reappear when the device is seen again). The Thread dataset is not touched.",
   "rebuild.done": "Tree cleared and rebuilding from live traffic. Names kept: {kept}; dropped: {dropped} (devices known only by short address).",
+  "link.stale": "stale",
   "copy": "Copy", "copied": "Copied",
   "d.parent": "Parent", "d.children": "Children", "d.neighbors": "Router links", "d.addresses": "IPv6 addresses",
   "d.first": "First seen", "d.last": "Last seen", "d.state": "State", "d.mode": "Mode", "d.id": "Identity",

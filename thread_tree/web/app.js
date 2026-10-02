@@ -153,8 +153,8 @@ function renderMesh(p) {
     if (!a || !b || seen.has(key)) continue;
     seen.add(key);
     const lq = Math.max(l.lq_in, l.lq_out);
-    const line = s('line', { class: 'edge link', x1: a.x, y1: a.y, x2: b.x, y2: b.y, 'stroke-width': 1 + lq, opacity: lq ? 1 : .3 });
-    line.append(s('title', {}, `${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${l.cost}`));
+    const line = s('line', { class: `edge ${l.stale ? 'unknown' : 'link'}`, x1: a.x, y1: a.y, x2: b.x, y2: b.y, 'stroke-width': 1 + lq, opacity: lq && !l.stale ? 1 : .3 });
+    line.append(s('title', {}, `${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${l.cost}${l.stale ? ' — ' + t('link.stale') : ''}`));
     svg.append(line);
   }
   for (const n of routers) {
@@ -253,7 +253,8 @@ function renderDrawer() {
       dd(t('d.first'), ago(n.first_seen)), dd(t('d.last'), ago(n.last_seen))),
     tn && tn.children.length ? [h('h3', {}, t('d.children')), h('div', {}, tn.children.map(c => h('div', {}, nodeLink(c.id))))] : [],
     links.length ? [h('h3', {}, t('d.neighbors')), ...links.map(l => h('div', {}, neighborLabel(n, l, nodeLink),
-      ` — ${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${l.cost}`))] : [],
+      ` — ${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${l.cost}`,
+      l.stale ? h('span', { class: 'tag' }, t('link.stale')) : null))] : [],
     h('h3', {}, t('d.addresses')), ...(n.addresses.length ? addressList(n, false) : [h('div', { class: 'muted' }, '—')]));
 }
 

@@ -46,6 +46,19 @@ def _observe(engine: Engine, now: float, ext: str, rloc16: int):
     return engine.on_frame(now, ext, rloc16)
 
 
+def advertise(engine: Engine, now: float) -> None:
+    """What every router's MLE advertisement carries: leader data and its links (Route64)."""
+    with engine.lock:
+        by_router: dict[int, list] = {}
+        for a, b, lq_in, lq_out in LINKS:
+            by_router.setdefault(a, []).append((b, lq_in, lq_out, 1))
+            by_router.setdefault(b, []).append((a, lq_out, lq_in, 1))
+        for rid, entries in by_router.items():
+            node = engine.nodes.get(engine.rloc_index.get(rid << 10, ""))
+            engine.on_leader_data(now, node, 0x1A2B3C4D, 0)
+            engine.on_route64(now, rid << 10, entries)
+
+
 def populate(engine: Engine, now: float | None = None) -> None:
     now = time.time() if now is None else now
     with engine.lock:
@@ -58,12 +71,7 @@ def populate(engine: Engine, now: float | None = None) -> None:
                 node.border_router = True
                 engine.on_address_notification(now, _iid_addr(OMR_PREFIX, ext), rid << 10)
                 engine.on_address_notification(now, str(A.addr_from(0x2A0201234567AA00, 0x1)), rid << 10)
-        by_router: dict[int, list] = {}
-        for a, b, lq_in, lq_out in LINKS:
-            by_router.setdefault(a, []).append((b, lq_in, lq_out, 1))
-            by_router.setdefault(b, []).append((a, lq_out, lq_in, 1))
-        for rid, entries in by_router.items():
-            engine.on_route64(now, rid << 10, entries)
+        advertise(engine, now)
         for prid, cid, ext, ftd, idle in CHILDREN:
             node = _observe(engine, now, ext, (prid << 10) | cid)
             engine.on_mode(now, node, ftd, idle)
@@ -86,6 +94,7 @@ class Simulator(threading.Thread):
                 for n in list(self.engine.nodes.values()):
                     if n.ext and rng.random() < 0.8:
                         n.last_seen = now
+                advertise(self.engine, now)
                 if rng.random() < 0.2:
                     prid, cid, ext, *_ = rng.choice([c for c in CHILDREN if c[2] not in INDIRECT])
                     new_parent = rng.choice(list(ROUTERS))
