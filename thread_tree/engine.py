@@ -157,6 +157,16 @@ class Engine:
             node.last_heard = ts
         return node
 
+    def on_destination(self, ts: float, dst_ext: str | None) -> None:
+        """A MAC address seen only as a frame destination: the device exists (not heard directly)."""
+        if dst_ext is not None and dst_ext != "ffffffffffffffff":
+            self.node_for(ts, ext=dst_ext, touch=False)
+
+    def on_address_assignment(self, ts: float, ext: str | None, rloc16: int | None) -> None:
+        """A parent told a child its new RLOC16 (Child ID Response): binds MAC address and short address."""
+        if ext is not None and rloc16 is not None and rloc16 not in (0xFFFE, 0xFFFF):
+            self.node_for(ts, ext=ext, rloc16=rloc16, touch=False)
+
     def on_ip(self, ts: float, sender: Node | None, src: str | None, dst: str | None) -> None:
         """IPv6 addresses of a frame. Only addresses that identify their owner
         are attributed: link-local (IID = EUI-64), RLOC (IID = RLOC16). Other

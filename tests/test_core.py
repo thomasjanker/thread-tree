@@ -335,6 +335,25 @@ class EkAdapterTests(unittest.TestCase):
         self.h.handle(ek(1, wpan_wpan_src64=["a4:c1:38:ff:fe:10:00:09"], wpan_wpan_cmd=["4"]))
         self.assertTrue(self.e.nodes["a4c138fffe100009"].polls)
 
+    def test_child_id_response_binds_mac_to_short_address(self):
+        # parent 0xd400 answers the child's attach request: dst = child's MAC, Address16 = assigned RLOC16
+        self.e.node_for(1.0, rloc16=0xD436, touch=False)  # known so far only by short address, never heard
+        self.h.handle(ek(5_000, wpan_src64=["aa:aa:aa:aa:aa:aa:aa:aa"], wpan_src16=["0xd400"],
+                         wpan_dst64=["a4:c1:38:ff:fe:10:00:77"], mle_cmd=["12"], mle_tlv_addr16=["d4:36"]))
+        node = self.e.nodes["a4c138fffe100077"]
+        self.assertEqual(node.rloc16, 0xD436)
+        self.assertNotIn("rloc16:d436", self.e.nodes)  # provisional node merged into the MAC-identified one
+        self.assertEqual(node.last_heard, 0.0)  # learned from someone else's frame: not heard directly
+
+    def test_other_mle_commands_do_not_bind_address16(self):
+        self.h.handle(ek(5_000, wpan_src64=["aa:aa:aa:aa:aa:aa:aa:aa"], wpan_dst64=["a4:c1:38:ff:fe:10:00:77"],
+                         mle_cmd=["14"], mle_tlv_addr16=["d4:36"]))
+        self.assertIsNone(self.e.nodes["a4c138fffe100077"].rloc16)  # exists as destination only
+
+    def test_broadcast_destination_is_ignored(self):
+        self.h.handle(ek(5_000, wpan_src64=["aa:aa:aa:aa:aa:aa:aa:aa"], wpan_dst64=["ff:ff:ff:ff:ff:ff:ff:ff"]))
+        self.assertNotIn("ffffffffffffffff", self.e.nodes)
+
     def test_network_data_marks_border_router(self):
         self.e.on_frame(1.0, "aa" * 8, 0x1400)
         self.h.handle(ek(3, wpan_src64=["aa:aa:aa:aa:aa:aa:aa:aa"], mle_cmd=["8"],

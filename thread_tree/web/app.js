@@ -41,13 +41,19 @@ function typeLabel(type) {
     default: return document.createTextNode(t('type.' + type));
   }
 }
+// MAC address (IEEE 802.15.4 extended address / EUI-64) as aa:bb:cc:dd:ee:ff:00:11, like Wireshark
+const fmtMac = ext => ext.match(/../g).join(':');
+function macCell(n) {
+  if (!n.ext) return h('span', { class: 'muted', title: t('mac.unknown') }, '—');
+  return h('span', { class: 'addr' }, h('span', { class: 'mono' }, fmtMac(n.ext)), copyButton(fmtMac(n.ext)));
+}
 function roleLabel(role) { return t('role.' + role); }
 function nodeName(n) {
   if (n.placeholder) return t(n.role === 'router' ? 'placeholder.router' : n.role === 'detached' ? 'placeholder.detached' : 'placeholder.' + n.role);
   if (n.name) return n.name;
-  return n.ext ? '…' + n.ext.slice(-8) : (n.rloc16 || n.id);
+  return n.ext ? '…' + fmtMac(n.ext).slice(-11) : (n.rloc16 || n.id);
 }
-const hwId = n => (n.ext ? '…' + n.ext.slice(-8) : (n.rloc16 || n.id));  // identity next to a given name
+const hwId = n => (n.ext ? '…' + fmtMac(n.ext).slice(-11) : (n.rloc16 || n.id));  // identity next to a given name
 function ago(ts) {
   if (!ts) return t('never');
   const sec = Math.round(ts - Date.now() / 1000);
@@ -160,7 +166,7 @@ function renderMesh(p) {
 
 // ---- table view ------------------------------------------------------------
 function searchText(n) {
-  return [n.name, n.role, roleLabel(n.role), n.rloc16, n.ext, n.border_router ? 'br' : '', ...n.addresses.map(a => a.addr)].join(' ').toLowerCase();
+  return [n.name, n.role, roleLabel(n.role), n.rloc16, n.ext, n.ext ? fmtMac(n.ext) : '', n.border_router ? 'br' : '', ...n.addresses.map(a => a.addr)].join(' ').toLowerCase();
 }
 function reachLabel(n) {
   return h('span', { class: `tag reach-${n.heard ? 'direct' : 'indirect'}`, title: t(n.heard ? 'reach.direct.tip' : 'reach.indirect.tip') },
@@ -181,10 +187,10 @@ function renderTable(p) {
     const fresh = document.querySelector('#view input');  // render() replaced the element
     if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
   });
-  const head = h('tr', {}, ...['col.name', 'col.role', 'col.rloc16', 'col.ext', 'col.reach', 'col.addresses', 'col.seen'].map(k => h('th', {}, t(k))));
+  const head = h('tr', {}, ...['col.name', 'col.role', 'col.rloc16', 'col.mac', 'col.reach', 'col.addresses', 'col.seen'].map(k => h('th', {}, t(k))));
   const body = rows.map(n => h('tr', { class: `row${n.online ? '' : ' offline'}${state.selected === n.id ? ' selected' : ''}`, onclick: () => select(n.id) },
     h('td', {}, n.name || '—'), h('td', {}, roleChip(n.role), ' ', n.border_router ? abbr('BR') : null), h('td', { class: 'mono' }, n.rloc16 || '—'),
-    h('td', { class: 'mono' }, n.ext || '—'), h('td', {}, reachLabel(n)), h('td', {}, addressList(n, true)), h('td', {}, ago(n.last_seen))));
+    h('td', {}, macCell(n)), h('td', {}, reachLabel(n)), h('td', {}, addressList(n, true)), h('td', {}, ago(n.last_seen))));
   return h('div', {}, h('div', { class: 'toolbar' }, input), h('table', {}, h('thead', {}, head), h('tbody', {}, body)));
 }
 
@@ -237,7 +243,7 @@ function renderDrawer() {
     h('dl', {},
       dd(t('d.state'), t(n.online ? 'online' : 'offline')),
       n.name ? dd(t('d.hwid'), h('span', { class: 'mono' }, hwId(n))) : [],
-      dd(abbr('EUI-64'), h('span', { class: 'mono' }, n.ext || '—')),
+      dd(h('span', {}, abbr('MAC', t('d.mac')), ' / ', abbr('EUI-64')), macCell(n)),
       dd(abbr('RLOC16'), h('span', { class: 'mono' }, n.rloc16 || '—')),
       dd(t('d.mode'), Array.isArray(mode) ? [abbr(mode[0]), ' · ' + mode[1]] : mode),
       dd(t('col.partition'), '0x' + Number(n.partition_id).toString(16)),

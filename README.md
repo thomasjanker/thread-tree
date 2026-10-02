@@ -73,6 +73,7 @@ so nodes, roles and addresses survive restarts (nodes unseen for 30 days are pru
 | Parent of an end device | RLOC16: parent router ID = `rloc16 >> 10` (recomputed, never stored) |
 | MED / SED / FED | Mode TLV in Parent/Child ID/Child Update Requests; MAC data polls mark sleepy |
 | Border router flag | Network Data (Border Router / Has Route RLOC16s) |
+| MAC address (EUI-64) | transmitter/destination of frames; links a short address to its MAC when a parent answers a child's attach request (Child ID Response: destination MAC + assigned Address16) |
 | Reception: direct / indirect | direct = the sniffer received a frame transmitted by that node itself; indirect = known only from others' traffic (out of range) |
 | Link-local, RLOC, ALOC | derived from EUI-64 / RLOC16 / mesh-local prefix (marked "derived") |
 | ML-EID, OMR/GUA | Address Registration of children, Address Notification (marked "observed") |

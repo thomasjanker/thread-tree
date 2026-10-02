@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 FIELDS: dict[str, list[str]] = {
     "src64": ["wpan.src64"],
     "src16": ["wpan.src16"],
+    "dst64": ["wpan.dst64"],
+    "mle_addr16": ["mle.tlv.addr16"],
     "mac_cmd": ["wpan.cmd"],
     "ip_src": ["ipv6.src"],
     "ip_dst": ["ipv6.dst"],
@@ -47,6 +49,7 @@ FIELDS: dict[str, list[str]] = {
 
 # MLE command IDs (Thread spec 4.5)
 MLE_ADVERTISEMENT = 4
+MLE_CHILD_ID_RESPONSE = 12  # parent -> child: carries the assigned Address16
 MLE_FROM_CHILD = (9, 11, 13)  # Parent Request, Child ID Request, Child Update Request
 MAC_DATA_REQUEST = 4
 
@@ -132,6 +135,9 @@ class Handler:
         if src16 in (0xFFFE, 0xFFFF):  # "extended address only" / broadcast marker
             src16 = None
         sender = e.on_frame(ts, ext, src16)
+        dst64 = self._one(layers, "dst64")
+        dst_ext = A.normalize_ext(dst64) if dst64 else None
+        e.on_destination(ts, dst_ext)
 
         if self._int(self._one(layers, "mac_cmd")) == MAC_DATA_REQUEST:
             e.on_data_poll(ts, sender)
@@ -167,6 +173,12 @@ class Handler:
             entries = self._route_entries(layers, mask)
             if entries:
                 e.on_route64(ts, src16, entries)
+
+        if cmd == MLE_CHILD_ID_RESPONSE:
+            addr16 = self._one(layers, "mle_addr16")
+            dst64 = self._one(layers, "dst64")
+            if addr16 and dst64:
+                e.on_address_assignment(ts, A.normalize_ext(dst64), A.parse_rloc16(addr16))
 
         if cmd in MLE_FROM_CHILD:
             ftd = self._bool(self._one(layers, "mode_ftd"))

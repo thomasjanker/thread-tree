@@ -56,6 +56,9 @@
   "d.name.remove": "Remove name",
   "d.name.noext": "This device is known only by its short address so far. If that address changes, the name may later end up on a different device; it is safest to name devices that show an extended address.",
   "d.name.locked": "Naming is restricted to the machine running Thread Tree (--local-config-only).",
+  "col.mac": "MAC address",
+  "d.mac": "MAC address",
+  "mac.unknown": "Not known yet: so far the sniffer has only seen this device by its short address (RLOC16). The MAC address appears as soon as the device sends or receives a frame addressed with it, or attaches to a parent.",
   "copy": "Copy", "copied": "Copied",
   "d.parent": "Parent", "d.children": "Children", "d.neighbors": "Router links", "d.addresses": "IPv6 addresses",
   "d.first": "First seen", "d.last": "Last seen", "d.state": "State", "d.mode": "Mode", "d.id": "Identity",
@@ -94,6 +97,7 @@
     "MLE": ["Mesh Link Establishment", "Thread control protocol; its advertisements reveal routers and links."],
     "TLV": ["Type-Length-Value", "Encoding of data fields in Thread messages."],
     "PAN": ["Personal Area Network", "IEEE 802.15.4 network ID; one Thread network = one PAN ID."],
+    "MAC": ["Media Access Control address", "Hardware address of the radio: the IEEE 802.15.4 extended address (EUI-64), 8 bytes, unique per device, shown like in Wireshark (aa:bb:cc:dd:ee:ff:00:11). Stays the same when the device re-attaches."],
     "EUI-64": ["Extended Unique Identifier", "64-bit hardware address (extended address) that identifies a node permanently."],
     "SRP": ["Service Registration Protocol", "Lets devices register services at the border router."]
   }

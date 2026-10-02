@@ -56,6 +56,9 @@
   "d.name.remove": "Namen entfernen",
   "d.name.noext": "Dieses Gerät ist bisher nur über seine Kurzadresse bekannt. Ändert sich diese Adresse, kann der Name später bei einem anderen Gerät landen; am sichersten benennt man Geräte, die eine erweiterte Adresse zeigen.",
   "d.name.locked": "Das Benennen ist auf den Rechner beschränkt, auf dem Thread Tree läuft (--local-config-only).",
+  "col.mac": "MAC-Adresse",
+  "d.mac": "MAC-Adresse",
+  "mac.unknown": "Noch nicht bekannt: der Sniffer hat dieses Gerät bisher nur über seine Kurzadresse (RLOC16) gesehen. Die MAC-Adresse erscheint, sobald das Gerät einen Frame mit ihr sendet oder empfängt oder sich an einen Parent anmeldet.",
   "copy": "Kopieren", "copied": "Kopiert",
   "d.parent": "Eltern", "d.children": "Kinder", "d.neighbors": "Router-Verbindungen", "d.addresses": "IPv6-Adressen",
   "d.first": "Erstmals gesehen", "d.last": "Zuletzt gesehen", "d.state": "Status", "d.mode": "Modus", "d.id": "Identität",
@@ -94,6 +97,7 @@
     "MLE": ["Mesh Link Establishment", "Thread-Steuerprotokoll; seine Advertisements verraten Router und Verbindungen."],
     "TLV": ["Type-Length-Value", "Kodierung von Datenfeldern in Thread-Nachrichten."],
     "PAN": ["Personal Area Network", "IEEE-802.15.4-Netzwerk-ID; ein Thread-Netz = eine PAN-ID."],
+    "MAC": ["Media Access Control-Adresse", "Hardwareadresse des Funkchips: die erweiterte IEEE-802.15.4-Adresse (EUI-64), 8 Bytes, pro Gerät eindeutig, dargestellt wie in Wireshark (aa:bb:cc:dd:ee:ff:00:11). Bleibt beim erneuten Anmelden gleich."],
     "EUI-64": ["Extended Unique Identifier", "64-Bit-Hardwareadresse (erweiterte Adresse), die einen Knoten dauerhaft identifiziert."],
     "SRP": ["Service Registration Protocol", "Erlaubt Geräten, Dienste beim Border Router anzumelden."]
   }
