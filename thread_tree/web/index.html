@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thread Tree</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <h1 id="title">Thread Tree</h1>
+    <select id="partition" aria-label="Partition"></select>
+    <nav id="views" role="tablist"></nav>
+    <span class="spacer"></span>
+    <span id="status" class="status" role="status"></span>
+    <button id="settings-btn" type="button"></button>
+    <button id="legend-btn" type="button"></button>
+    <select id="lang" aria-label="Language">
+      <option value="en">English</option>
+      <option value="de">Deutsch</option>
+    </select>
+  </header>
+  <div id="banner" hidden></div>
+  <main>
+    <section id="view"></section>
+    <aside id="drawer" hidden></aside>
+  </main>
+  <dialog id="legend"></dialog>
+  <dialog id="settings"></dialog>
+  <script src="/app.js"></script>
+</body>
+</html>

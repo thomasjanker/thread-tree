@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "thread-tree"
+version = "0.1.0"
+description = "Passive Thread network visualizer: tree, roles and IPv6 addresses from an 802.15.4 sniffer"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []  # runtime needs only tshark (Wireshark) on the host
+
+[project.scripts]
+thread-tree = "thread_tree.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["thread_tree*"]
+
+[tool.setuptools.package-data]
+thread_tree = ["web/*", "web/i18n/*"]
