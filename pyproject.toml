@@ -8,6 +8,8 @@ version = "0.1.0"
 description = "Passive Thread network visualizer: tree, roles and IPv6 addresses from an 802.15.4 sniffer"
 readme = "README.md"
 requires-python = ">=3.10"
+license = {text = "GPL-3.0-or-later"}
+classifiers = ["License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)"]
 dependencies = []  # runtime needs only tshark (Wireshark) on the host
 
 [project.scripts]

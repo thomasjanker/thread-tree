@@ -102,3 +102,8 @@ thread_tree/web/          vanilla JS UI (tree, mesh, table views, legend, en/de)
 ```
 
 Matter support is planned as a later extension; the graph model is transport-agnostic.
+
+## License
+
+Copyright (C) 2026 Thomas Janker. Licensed under the GNU General Public License, version 3 or (at your
+option) any later version. See [LICENSE](LICENSE).
