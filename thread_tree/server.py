@@ -55,6 +55,13 @@ def may_write(client_ip: str, host_header: str | None, allow_remote: bool) -> bo
     return allow_remote or (is_loopback(client_ip) and host_name(host_header) in LOCAL_NAMES)
 
 
+def _flag(body: dict, key: str) -> bool:
+    value = body.get(key)
+    if not isinstance(value, bool):
+        raise ValueError(f"field '{key}' (true / false) missing")
+    return value
+
+
 def make_server(engine: Engine, host: str, port: int, controller: Controller) -> ThreadingHTTPServer:
     # On a loopback bind only local names are valid Host values; otherwise names are unknown.
     bound_to_loopback = is_loopback(host)
@@ -199,23 +206,26 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._action(controller.rebuild_topology)
             if path == "/api/diagnostics/run":
                 return self._action(controller.run_diagnostics)
+            if path == "/api/diagnostics/enabled":
+                return self._action(lambda body: controller.set_diag_enabled(_flag(body, "enabled")), with_body=True)
             self._config_write("set")
 
-        def _action(self, action) -> None:
-            """A state-changing request without parameters: same access rule as naming a device."""
+        def _action(self, action, with_body: bool = False) -> None:
+            """A state-changing request: same access rule as naming a device. with_body: action(body)."""
             if not self._write_allowed():
                 return
             if not may_write(self.client_address[0], self.headers.get("Host"), controller.allow_remote_config):
                 return self._json(403, {"error": "locked", "reason": "remote"})
             try:
-                if self._read_json() is None:  # requires application/json: not sendable by a plain cross-site form
+                body = self._read_json()  # requires application/json: not sendable by a plain cross-site form
+                if body is None:
                     return
+                result = action(body) if with_body else action()
+            except DiagUnavailable as exc:
+                return self._json(409, {"error": str(exc)})
             except (ValueError, json.JSONDecodeError) as exc:
                 return self._json(400, {"error": str(exc)})
-            try:
-                self._json(200, action())
-            except DiagUnavailable as exc:
-                self._json(409, {"error": str(exc)})
+            self._json(200, result)
 
         def do_DELETE(self):
             self._config_write("clear")

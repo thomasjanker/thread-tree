@@ -124,7 +124,7 @@ class DiagThread(threading.Thread):
 
     def __init__(self, engine: Engine, port: str, dataset_hex: str | None, interval: float = 300.0,
                  open_cli: Callable[[str], OtCli] = OtCli, clock: Callable[[], float] = time.time,
-                 join_timeout: float = 120.0, poll: float = 3.0, retry_delay: float = 15.0):
+                 join_timeout: float = 120.0, poll: float = 3.0, retry_delay: float = 15.0, paused: bool = False):
         super().__init__(daemon=True, name="diagnostics")
         self.engine, self.port, self.dataset_hex = engine, port, dataset_hex
         self.interval, self.open_cli, self.clock = min(MAX_INTERVAL, max(10.0, interval)), open_cli, clock
@@ -132,6 +132,9 @@ class DiagThread(threading.Thread):
         self.no_detail: dict[int, float] = {}
         self._stop_evt = threading.Event()
         self._wake = threading.Event()
+        self._paused = threading.Event()  # set: stay joined, but ask nothing (switched off in the UI)
+        if paused:
+            self._paused.set()
         with engine.lock:
             engine.diag_ttl = max(DIAG_TTL, 3 * self.interval)  # its answers stay current for three rounds
         self._set(enabled=True, port=port, state="starting", error=None)
@@ -148,6 +151,14 @@ class DiagThread(threading.Thread):
 
     def stop(self) -> None:
         self._stop_evt.set()
+        self._wake.set()
+
+    def set_paused(self, paused: bool) -> None:
+        """Switched off: the node stays in the network but stops asking; switched on: a round at once."""
+        if paused:
+            self._paused.set()
+        else:
+            self._paused.clear()
         self._wake.set()
 
     # ---- main loop ----------------------------------------------------------
@@ -179,7 +190,12 @@ class DiagThread(threading.Thread):
             self._set(state="joining", error=None)
             self._ensure_end_device(cli)
             while not self._stop_evt.is_set():
-                self._set(state="querying")
+                if self._paused.is_set():
+                    self._set(state="paused", paused=True)
+                    self._wake.wait(self.interval)
+                    self._wake.clear()
+                    continue
+                self._set(state="querying", paused=False)
                 started = self.clock()
                 summary = collect_round(cli.command, self.engine, started, self.no_detail)
                 self._set(state="idle", error=None, ts=started, duration=self.clock() - started,

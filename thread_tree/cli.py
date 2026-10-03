@@ -130,7 +130,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.cmd == "demo":
         populate(engine, history=True, active=True)
-        controller = Controller(engine, "demo", editable=False, locked_reason="demo", allow_remote_config=True)
+        controller = Controller(engine, "demo", editable=False, locked_reason="demo", allow_remote_config=True,
+                                settings_path=Path(args.db + ".settings.json"))
     else:
         if args.channel is not None and not 11 <= args.channel <= 26:
             print(f"invalid channel {args.channel}: Thread uses 11-26", file=sys.stderr)
@@ -143,7 +144,8 @@ def main(argv: list[str] | None = None) -> int:
                 cli_key=args.key or os.environ.get("THREAD_TREE_KEY"),
                 tshark=args.tshark, extra=args.tshark_arg, extcap_script=args.extcap_script,
                 allow_remote_config=not args.local_config_only,
-                diag_port=args.diag_port, diag_interval=args.diag_interval)
+                diag_port=args.diag_port, diag_interval=args.diag_interval,
+                settings_path=Path(args.db + ".settings.json"))
         except ValueError as exc:
             print(f"invalid dataset: {exc}", file=sys.stderr)
             return 2

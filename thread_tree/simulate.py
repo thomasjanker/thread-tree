@@ -298,7 +298,7 @@ class Simulator(threading.Thread):
                 if node.ext in INDIRECT:  # never heard, but other nodes keep addressing it
                     self.engine.on_destination(now, node.ext)
             advertise(self.engine, now)
-            if self.engine.diag_info.get("demo"):  # a round of the active diagnostics every minute
+            if self.engine.diag_info.get("demo") and not self.engine.diag_info.get("paused"):  # a round every minute
                 if self._active_at == 0.0:
                     self._active_at = now  # populate() has just done the first one
                 elif now - self._active_at >= 60.0:

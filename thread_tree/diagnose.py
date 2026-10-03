@@ -302,7 +302,8 @@ def _active_summary(engine: Engine, nodes: dict) -> dict:
     failures = [{"rloc16": f"0x{rloc:04x}", "node": by_rloc.get(f"0x{rloc:04x}"), "message": message}
                 for rloc, message in sorted((info.get("failures") or {}).items())]
     own = info.get("own_rloc16")
-    return {"enabled": bool(info.get("enabled")), "demo": bool(info.get("demo")), "state": info.get("state"),
+    return {"enabled": bool(info.get("enabled")), "demo": bool(info.get("demo")), "paused": bool(info.get("paused")),
+            "state": info.get("state"),
             "error": info.get("error"), "ts": info.get("ts"), "duration": info.get("duration"),
             "next": info.get("next"), "routers": info.get("routers"), "children": info.get("children"),
             "vendor": info.get("vendor"), "failures": failures,

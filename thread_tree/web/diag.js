@@ -103,6 +103,16 @@ async function askNow() {
   } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
 }
 
+async function setDiagEnabled(enabled) {
+  try {
+    const res = await fetch('/api/diagnostics/enabled', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.status);
+    notify(t(enabled ? 'diag.active.switched_on' : 'diag.active.switched_off'));
+    poll();
+  } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
+}
+
 // ---- small building blocks ------------------------------------------------------------------------------
 
 const card = (title, value, sub, extra) => h('div', { class: 'card' },
@@ -133,7 +143,11 @@ function activeCard(active) {
   const silent = active.failures || [];
   return card(t('diag.card.active'), t('diag.state.' + String(active.state || 'starting').replace(/ /g, '_')), sub,
     h('div', { class: 'card-actions' },
-      h('button', { type: 'button', disabled: state.config?.can_name === false ? 'disabled' : null, onclick: askNow }, t('diag.active.ask')),
+      h('button', { type: 'button', disabled: state.config?.can_name === false || active.paused ? 'disabled' : null, onclick: askNow }, t('diag.active.ask')),
+      ' ',
+      h('button', { type: 'button', disabled: state.config?.can_name === false ? 'disabled' : null, onclick: () => setDiagEnabled(!!active.paused) },
+        t(active.paused ? 'diag.active.switch_on' : 'diag.active.switch_off')),
+      active.paused ? h('p', { class: 'card-sub' }, t('diag.active.paused_note')) : null,
       silent.length ? h('p', { class: 'card-sub' }, fillTemplate(t('diag.active.failures'), { n: silent.length, names: silent.map(name).join(', ') }, (k, v) => v)) : null));
 }
 

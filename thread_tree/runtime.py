@@ -7,6 +7,7 @@ database). The key is never returned by any API.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import tempfile
@@ -36,11 +37,17 @@ class Controller:
                  cli_key: str | None = None, tshark: str = "tshark", extra: list[str] | None = None,
                  extcap_script: str = DEFAULT_EXTCAP_SCRIPT, editable: bool = True,
                  locked_reason: str | None = None, allow_remote_config: bool = False,
-                 diag_port: str | None = None, diag_interval: float = 300.0, diag_options: dict | None = None):
+                 diag_port: str | None = None, diag_interval: float = 300.0, diag_options: dict | None = None,
+                 settings_path: Path | None = None):
         self.engine, self.mode, self.source, self.channel = engine, mode, source, channel
         self.diag_port, self.diag_interval, self.diag_options = diag_port, diag_interval, diag_options or {}
         self.diag: DiagThread | None = None
         self._dataset_hex: str | None = None  # the raw dataset for the diagnostic node: contains the key, never leaves here
+        self.settings_path = settings_path  # settings changed in the UI (not secret)
+        self.diag_paused = bool(self._settings().get("diag_paused", False))
+        if mode == "demo" and self.diag_paused:  # the demo's simulated rounds stay switched off too
+            with engine.lock:
+                engine.diag_info = {**engine.diag_info, "state": "paused", "paused": True}
         self.path, self.tshark, self.extra, self.extcap_script = dataset_path, tshark, extra, extcap_script
         self.cli_key = cli_key
         self.allow_remote_config = allow_remote_config  # UI may change the dataset from other machines
@@ -165,6 +172,23 @@ class Controller:
         self.stop_capture()
         self.start_capture()
 
+    # ---- settings -----------------------------------------------------------
+
+    def _settings(self) -> dict:
+        try:
+            return json.loads(self.settings_path.read_text()) if self.settings_path and self.settings_path.is_file() else {}
+        except (OSError, ValueError) as exc:
+            log.error("settings file unusable (%s): ignoring it", exc)
+            return {}
+
+    def _save_settings(self, **values) -> None:
+        if not self.settings_path:
+            return
+        data = {**self._settings(), **values}
+        tmp = self.settings_path.with_name(self.settings_path.name + ".tmp")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, self.settings_path)
+
     # ---- active diagnostics -------------------------------------------------
 
     def start_diagnostics(self) -> None:
@@ -174,7 +198,7 @@ class Controller:
         with self.lock:
             self.stop_diagnostics()
             self.diag = DiagThread(self.engine, self.diag_port, self._dataset_hex, self.diag_interval,
-                                   **self.diag_options)
+                                   paused=self.diag_paused, **self.diag_options)
             self.diag.start()
 
     def stop_diagnostics(self) -> None:
@@ -194,6 +218,8 @@ class Controller:
     def run_diagnostics(self) -> dict:
         """Ask for a round now. Returns at once: the answers arrive within seconds to a minute."""
         with self.lock:
+            if self.diag_paused:
+                raise DiagUnavailable("active diagnostics are switched off")
             if self.mode == "demo":
                 from .simulate import refresh_active
                 refresh_active(self.engine, time.time())
@@ -202,6 +228,24 @@ class Controller:
                 raise DiagUnavailable("active diagnostics are not set up: start with --diag-port")
             self.diag.trigger()
             return {"queued": True}
+
+    def set_diag_enabled(self, enabled: bool) -> dict:
+        """The UI switch: off = the node stays in the network but asks nothing. Kept across restarts."""
+        with self.lock:
+            if self.mode != "demo" and self.diag is None:
+                raise DiagUnavailable("active diagnostics are not set up: start with --diag-port")
+            self.diag_paused = not enabled
+            self._save_settings(diag_paused=self.diag_paused)
+            if self.mode == "demo":
+                from .simulate import refresh_active
+                if enabled:
+                    refresh_active(self.engine, time.time())
+                else:
+                    with self.engine.lock:
+                        self.engine.diag_info = {**self.engine.diag_info, "state": "paused", "paused": True}
+            else:
+                self.diag.set_paused(not enabled)
+            return {"enabled": enabled}
 
     def rebuild_topology(self) -> dict:
         result = self.engine.reset_topology()
@@ -230,4 +274,5 @@ class Controller:
                 "decrypting": bool(self.key), "time": time.time(),
                 "stats": dict(cap.stats) if cap else {},
                 "diagnostics": self.mode == "demo" or self.diag is not None, "diagnostics_error": diag_error,
+                "diagnostics_paused": self.diag_paused,
             }
