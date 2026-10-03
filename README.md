@@ -109,7 +109,14 @@ findings. A coloured dot on a card in the tree marks nodes with a warning or cri
   interval); router links with quality in/out (with active diagnostics also the signal and loss the routers measure);
   parent or children; history of events; addresses; JSON download.
 - **History** (kept 30 days, 200 per device): first seen, role, parent (with the short address that came with it), short
-  address, partition, border router, online/offline, MAC address learned.
+  address, partition, border router, online/offline, MAC address learned, gaps in the polling, parent searches and the
+  attach that ended them.
+- **Behaviour of sleepy devices** (sniffer only): the usual interval of its data polls, its child timeout (as the device
+  announced it), gaps in the rhythm and searches for a new parent, with a chart of the polls. This is what shows when a
+  battery device "stops working" for a while: it skipped its polls past its timeout, its parent dropped it, and it had to
+  search for a new one. Gaps count only while the sniffer kept hearing other devices; a device that is weak at the
+  sniffer can still look like it skips polls. Not yet checked on real traffic (the MLE Timeout field `mle.tlv.timeout`
+  is taken from Wireshark's field reference).
 
 All of it, except the values marked as active diagnostics, is measured **at the sniffer**: RSSI/LQI are what the sniffer
 received, retransmissions are repeated frames it heard (same sequence number to the same destination within 0.5 s),
@@ -131,6 +138,9 @@ hints, not proof.
 | Network: sniffer silent, decryption failing | critical | no frame for 60 s while capturing / more failures than successes |
 | Network: partitions, leader changes, many offline, router limit | warning | |
 | Network: no / single border router, near the router limit | note | |
+| Gaps in its polling | note / warning | a sleepy device stopped polling for 4 usual intervals (and 30 s more) while the sniffer heard others; warning if longer than its child timeout or 3 times in 24 h |
+| Searches for a parent | note / warning | MLE Parent Requests (one search = requests within 2 min); warning from 3 in 24 h |
+| Polls barely within its timeout / silent right now | warning | usual poll interval 90 % of its child timeout or more / no poll for a gap's length right now |
 | Active: router loses frames to a neighbour | warning | the router could not deliver 25 % of its frames (or 5 % of its messages) to a neighbour |
 | Active: poor link to its parent | note / warning | parent hears it at -90 dBm or weaker, or loses 25 % of the frames (5 % of the messages: warning) |
 | Active: parent has not heard it for a long time, router does not answer detail queries | notes | 80 % of the child timeout; usually an older Thread stack |

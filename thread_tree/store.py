@@ -22,7 +22,8 @@ CREATE TABLE IF NOT EXISTS nodes (
   first_seen REAL NOT NULL, last_seen REAL NOT NULL, last_role TEXT,
   last_heard REAL NOT NULL DEFAULT 0, parent_hint INTEGER, last_addressed REAL NOT NULL DEFAULT 0,
   br_seen REAL NOT NULL DEFAULT 0, mac_confirmed REAL NOT NULL DEFAULT 0, stats TEXT,
-  version INTEGER, last_diag REAL NOT NULL DEFAULT 0, link TEXT, vendor TEXT, vendor_try REAL NOT NULL DEFAULT 0);
+  version INTEGER, last_diag REAL NOT NULL DEFAULT 0, link TEXT, vendor TEXT, vendor_try REAL NOT NULL DEFAULT 0,
+  child_timeout INTEGER, behavior TEXT);
 CREATE TABLE IF NOT EXISTS addresses (
   node_id TEXT NOT NULL REFERENCES nodes(id) ON DELETE CASCADE, addr TEXT NOT NULL,
   first_seen REAL NOT NULL, last_seen REAL NOT NULL, PRIMARY KEY (node_id, addr));
@@ -46,8 +47,8 @@ CREATE INDEX IF NOT EXISTS events_node ON events (node_id, ts);
 _NODE_COLS = ("id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
               "border_router", "first_seen", "last_seen", "last_heard", "parent_hint", "last_role",
               "last_addressed", "br_seen", "mac_confirmed", "stats", "version", "last_diag", "link", "vendor",
-              "vendor_try")
-_JSON_COLS = ("stats", "link", "vendor")
+              "vendor_try", "child_timeout", "behavior")
+_JSON_COLS = ("stats", "link", "vendor", "behavior")
 _BOOL_COLS = ("ftd", "rx_on_idle", "polls", "border_router")
 
 
@@ -71,7 +72,8 @@ class Store:
             if "stats" not in columns:
                 db.execute("ALTER TABLE nodes ADD COLUMN stats TEXT")  # older DB
             for column, ddl in (("version", "INTEGER"), ("last_diag", "REAL NOT NULL DEFAULT 0"), ("link", "TEXT"),
-                                ("vendor", "TEXT"), ("vendor_try", "REAL NOT NULL DEFAULT 0")):
+                                ("vendor", "TEXT"), ("vendor_try", "REAL NOT NULL DEFAULT 0"),
+                                ("child_timeout", "INTEGER"), ("behavior", "TEXT")):
                 if column not in columns:
                     db.execute(f"ALTER TABLE nodes ADD COLUMN {column} {ddl}")  # older DB
             db.execute("INSERT OR IGNORE INTO meta VALUES ('schema_version', ?)", (str(SCHEMA_VERSION),))

@@ -23,7 +23,7 @@ function paramText(key, value) {
   if (key === 'rate') return fmtPct(value);
   if (key === 'msg_rate') return fmtPct(value, 1);
   if (key === 'rssi') return fmtDbm(value);
-  if (key === 'mean' || key === 'seconds' || key === 'age' || key === 'timeout') return fmtDuration(value);
+  if (['mean', 'seconds', 'age', 'timeout', 'longest', 'usual'].includes(key)) return fmtDuration(value);
   return String(value);
 }
 
@@ -44,6 +44,11 @@ function eventText(ev) {
     return key === 'role' ? roleLabel(v) : String(v);
   };
   const params = {};
+  if (ev.kind === 'poll_gap') return fillTemplate(t('event.poll_gap'), { seconds: fmtDuration(p.seconds), usual: fmtDuration(p.usual) }, (k, v) => v);
+  if (ev.kind === 'parent_search') return t('event.parent_search') + (p.parent === null || p.parent === undefined ? ''
+    : fillTemplate(t('event.parent_search.attached'), { router: routerLabel(p.parent) }, (k, v) => v));
+  if (ev.kind === 'attached') return fillTemplate(t('event.attached'),
+    { to: p.to === null || p.to === undefined ? '–' : routerLabel(p.to), seconds: fmtDuration(p.seconds), requests: p.requests }, (k, v) => v);
   if (ev.kind === 'first_seen') params.how = t('how.' + p.how);
   else if (ev.kind === 'mac_learned') params.rloc16 = p.rloc16;
   else if ('from' in p) { params.from = value(ev.kind, p.from); params.to = value(ev.kind, p.to); }
@@ -327,6 +332,25 @@ function timingSection(d) {
 
 const lossCell = pct => h('td', { class: `num${pct !== null && pct !== undefined && pct >= LINK_LOSS_HIGH ? ' loss-high' : ''}` }, fmtPercentValue(pct));
 
+// rhythm of a sleepy device and its searches for a parent (sniffer)
+function behaviorSection(d) {
+  const b = d.behavior;
+  if (!b) return null;
+  const labels = { lang: state.lang, title: t('diag.chart.polls'), frames: t('kind.poll'), retries: t('diag.retries') };
+  const polls = { ...d.series, frames: d.series.polls, retries: d.series.polls.map(() => 0) };
+  return section('diag.sec.behavior',
+    b.searching ? h('p', {}, h('span', { class: 'tag reach-indirect' }, t('diag.b.searching'))) : null,
+    h('div', { class: 'tiles' },
+      tile(t('diag.b.usual'), fmtDuration(b.usual), t('diag.b.usual.tip')),
+      tile(t('diag.b.timeout'), fmtDuration(b.timeout), t('diag.b.timeout.tip')),
+      tile(t('diag.b.last'), b.last_poll ? ago(b.last_poll) : '–'),
+      tile(t('diag.b.gaps'), String(b.gaps_24h)),
+      tile(t('diag.b.longest'), fmtDuration(b.longest_gap_24h)),
+      tile(t('diag.b.searches'), String(b.searches_24h), t('diag.b.searches.tip'))),
+    d.stats.poll ? [h('h4', {}, t('diag.chart.polls')), activityChart(polls, labels)] : null,
+    h('p', { class: 'muted small' }, t('diag.note.behavior')));
+}
+
 function linksSection(d) {
   if (!d.links.length) return d.role === 'router' || d.role === 'leader'
     ? section('diag.sec.links', h('p', { class: 'muted' }, t('diag.links.none'))) : null;
@@ -424,7 +448,7 @@ function renderNodeDiag() {
       h('a', { class: 'btnlink', href: `/api/nodes/${encodeURIComponent(d.id)}/diagnostics`, download: `thread-tree-${d.id}.json` }, t('diag.export.json'))),
     facts,
     d.findings.length ? section('diag.findings.title', d.findings.map(f => findingRow(f, null))) : null,
-    signalSection(d), trafficSection(d), timingSection(d), linksSection(d), parentSection(d), parentLinkSection(d), childrenSection(d),
+    behaviorSection(d), signalSection(d), trafficSection(d), timingSection(d), linksSection(d), parentSection(d), parentLinkSection(d), childrenSection(d),
     historySection(d),
     section('diag.sec.addresses', d.addresses.length ? addressList({ addresses: d.addresses }, false) : h('p', { class: 'muted' }, '–')));
 }

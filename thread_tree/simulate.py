@@ -146,8 +146,14 @@ def seed_history(engine: Engine, now: float, hours: int = 24, seed: int = 7) -> 
             parents = [17, 9, 17, 9, 17, 9]
             for i, (old, new) in enumerate(zip(parents, parents[1:])):
                 ts = now - (len(parents) - i) * 1800
+                # it lost its parent, searched (a few Parent Requests) and attached to the other router
+                engine._log(flapper, ts - 40, "parent_search", parent=old)
+                engine._log(flapper, ts - 4, "attached", to=new, seconds=36, requests=3)
                 engine._log(flapper, ts, "parent", **{"from": old, "to": new},
                             rloc16_from=f"0x{_flapper_rloc(old):04x}", rloc16_to=f"0x{_flapper_rloc(new):04x}")
+        window = engine.nodes.get(OLD_CHILD)
+        if window is not None:  # a sleepy device that went quiet for longer than its child timeout
+            engine._log(window, now - 3 * 3600, "poll_gap", seconds=420, usual=4.0, timeout=240)
         for node in engine.nodes.values():
             node.events.sort(key=lambda e: e["ts"])
 
@@ -268,6 +274,8 @@ def populate(engine: Engine, now: float | None = None, history: bool = False, ac
         for prid, cid, ext, ftd, idle in CHILDREN:
             node = _observe(engine, now, ext, (prid << 10) | cid)
             engine.on_mode(now, node, ftd, idle)
+            if not idle:
+                engine.on_child_timeout(now, node, 240)  # what sleepy devices announce when they attach
             engine.on_registered_addresses(now, node, [_iid_addr(ML_PREFIX, ext)])
         if history:
             seed_history(engine, now)
@@ -307,6 +315,8 @@ class Simulator(threading.Thread):
             flapper = self.engine.nodes.get(FLAPPER)
             if flapper is not None and self.rng.random() < 0.02:  # now and then it moves to the other router
                 new_parent = 9 if flapper.rloc16 and (flapper.rloc16 >> 10) == 17 else 17
+                self.engine.on_parent_request(now, flapper)  # it searches, then attaches to the other router
+                self.engine.on_attach_request(now, flapper, self.engine.nodes.get(ROUTERS[new_parent][0]))
                 self.engine.on_frame(now, FLAPPER, _flapper_rloc(new_parent))
             self.engine.dirty = True
 

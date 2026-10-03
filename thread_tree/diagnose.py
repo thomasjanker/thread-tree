@@ -12,6 +12,7 @@ import csv
 import io
 from collections import defaultdict
 
+from . import behavior as B
 from .engine import Engine
 from .otdiag import THREAD_VERSIONS
 from .topology import snapshot
@@ -38,6 +39,10 @@ MSG_ERR_WARN = 5.0           # ... or of messages that were lost although every 
 RSS_WEAK_LINK = -90          # dBm that a device receives from its neighbour: near what the radios can still decode
 CHILD_AGE_WARN = 0.8         # share of its timeout that a parent has not heard a child
 ACTIVE_STALE = 3600.0        # active measurements older than this say nothing about now (the collector stopped)
+# behaviour of sleepy devices at the sniffer (behavior.py)
+POLL_GAPS_WARN = 3           # gaps in the poll rhythm in 24 h (one longer than the child timeout warns at once)
+SEARCHES_WARN = 3            # parent searches in 24 h
+POLL_TIMEOUT_SHARE = 0.9     # usual poll interval this close to the child timeout: no room for a single lost poll
 
 
 # Every code a finding can have; the UI needs a title, a text and a hint for each (tested in both languages).
@@ -47,6 +52,7 @@ FINDING_CODES = (
     "sniffer_silent", "decrypt_failing", "partitions", "no_border_router", "single_border_router", "router_limit",
     "router_near_limit", "leader_changes", "many_offline",
     "link_lossy", "child_link_poor", "child_age_high", "router_no_detail", "indirect_confirmed", "diag_failing",
+    "poll_gaps", "parent_searches", "poll_vs_timeout", "silent_now",
 )
 
 
@@ -173,6 +179,50 @@ def _active_child_findings(raw, now: float, ttl: float) -> list[dict]:
     return out
 
 
+def behavior_summary(engine: Engine, raw, now: float) -> dict | None:
+    """Poll rhythm, gaps and parent searches of a device in the last 24 hours; None if there is nothing to say."""
+    if raw is None:
+        return None
+    b = raw.behavior or {}
+    day = [ev for ev in raw.events if ev["ts"] >= now - DAY]
+    gaps = [ev["params"].get("seconds") or 0 for ev in day if ev["kind"] == "poll_gap"]
+    searches = sum(1 for ev in day if ev["kind"] == "parent_search")
+    usual = B.usual_interval(b)
+    if usual is None and not gaps and not searches and raw.child_timeout is None:
+        return None
+    alive = engine.last_frame_any is not None and now - engine.last_frame_any <= 2 * B.SNIFFER_OUTAGE
+    return {"usual": usual, "timeout": raw.child_timeout, "last_poll": b.get("last_poll"), "gaps_24h": len(gaps),
+            "longest_gap_24h": max(gaps) if gaps else None, "searches_24h": searches,
+            "searching": bool(b.get("search")) and now - b["search"]["last"] <= B.SEARCH_EPISODE,
+            "silent": B.silence(b, engine.last_frame_any) if alive and not _is_router(raw) else None}
+
+
+def _is_router(raw) -> bool:
+    return raw.rloc16 is not None and raw.rloc16 & 0x3FF == 0
+
+
+def _behavior_findings(engine: Engine, raw, now: float) -> list[dict]:
+    s = behavior_summary(engine, raw, now)
+    if s is None:
+        return []
+    out: list[dict] = []
+    timeout = s["timeout"]
+    if s["gaps_24h"]:
+        longer = timeout is not None and (s["longest_gap_24h"] or 0) > timeout
+        severity = "warn" if longer or s["gaps_24h"] >= POLL_GAPS_WARN else "info"
+        out.append(finding("poll_gaps", severity, count=s["gaps_24h"], longest=s["longest_gap_24h"], usual=s["usual"],
+                           timeout=timeout))
+    if s["searches_24h"]:
+        out.append(finding("parent_searches", "warn" if s["searches_24h"] >= SEARCHES_WARN else "info",
+                           count=s["searches_24h"]))
+    if s["usual"] is not None and timeout and s["usual"] >= POLL_TIMEOUT_SHARE * timeout:
+        out.append(finding("poll_vs_timeout", "warn", usual=s["usual"], timeout=timeout))
+    if s["silent"]:
+        out.append(finding("silent_now", "warn", seconds=s["silent"]["seconds"], usual=s["silent"]["usual"],
+                           timeout=timeout))
+    return out
+
+
 def _recent(events: list[dict], kinds: tuple[str, ...], now: float, both_known: bool = False) -> int:
     count = 0
     for ev in events:
@@ -248,6 +298,7 @@ def _node_findings(engine: Engine, nodes: dict, nid: str, now: float, graph: dic
             out.append(finding("retry_high", "warn", rate=w["retry_rate"], frames=w["frames"]))
         if w["rssi_n"] >= RSSI_MIN_SAMPLES and w["rssi_avg"] < RSSI_WEAK:
             out.append(finding("signal_weak", "info", rssi=w["rssi_avg"], samples=w["rssi_n"]))
+    out.extend(_behavior_findings(engine, raw, now))
     if not n["heard"] and not n.get("placeholder"):
         if _fresh(n.get("last_diag"), now, _ttl(engine)):  # the network itself vouches for it
             out.append(finding("indirect_confirmed", "info", since=n["last_diag"]))
@@ -451,6 +502,7 @@ def node_diagnostics(engine: Engine, snap: dict, analysis: dict, node_id: str, n
             "first_seen": n["first_seen"], "last_seen": n["last_seen"], "last_heard": n["last_heard"],
             "last_addressed": n["last_addressed"], "mac_confirmed": n["mac_confirmed"],
             "status": info["status"], "findings": info["findings"],
+            "behavior": behavior_summary(engine, raw, now),
             "version": n["version"], "last_diag": n["last_diag"], "vendor": n["vendor"], "link": n["link"],
             "diag_self": n["diag_self"], "ftd": n["ftd"], "rx_on_idle": n["rx_on_idle"],
             "stats": raw.stats.summary(now), "series": raw.stats.series(now, 24),
@@ -466,13 +518,19 @@ CSV_COLUMNS = ("id", "name", "mac", "rloc16", "role", "online", "heard", "partit
                "first_seen", "last_seen", "last_heard", "last_addressed", "frames", "bytes", "retries", "retry_rate",
                "rssi_avg", "rssi_min", "rssi_max", "adv_mean_s", "poll_mean_s", "addressed", "status", "findings",
                "thread_version", "last_diag", "vendor", "model", "firmware", "parent_rssi", "parent_margin",
-               "parent_frame_err")
+               "parent_frame_err", "poll_usual_s", "child_timeout_s", "poll_gaps_24h", "parent_searches_24h")
 
 
 def _csv_text(value) -> str:
     """Text for a user-controlled cell; a leading = + - @ would be run as a formula by spreadsheets."""
     text = "" if value is None else str(value)
     return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def _behavior_columns(s: dict | None) -> list:
+    if s is None:
+        return [None, None, None, None]
+    return [None if s["usual"] is None else round(s["usual"], 1), s["timeout"], s["gaps_24h"], s["searches_24h"]]
 
 
 def nodes_csv(engine: Engine, snap: dict, analysis: dict, now: float) -> str:
@@ -499,7 +557,8 @@ def nodes_csv(engine: Engine, snap: dict, analysis: dict, now: float) -> str:
                    " ".join(f["code"] for f in info["findings"]),
                    THREAD_VERSIONS.get(n["version"], n["version"]), n["last_diag"] or None,
                    *[_csv_text((n["vendor"] or {}).get(key)) for key in ("name", "model", "sw")],
-                   *[(n["link"] or {}).get(key) for key in ("rss_ave", "margin", "frame_err")]]
+                   *[(n["link"] or {}).get(key) for key in ("rss_ave", "margin", "frame_err")],
+                   *_behavior_columns(behavior_summary(engine, raw, now))]
             row[1] = _csv_text(row[1])  # the user-given name and the texts a device reports need defusing; numbers stay
             writer.writerow(row)
     return out.getvalue()

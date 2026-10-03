@@ -16,6 +16,7 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from . import addresses as A
+from . import behavior as B
 from .otdiag import Child, Netdata, Router, RouterNeighbor
 from .presence import presence
 from .stats import NodeStats
@@ -58,6 +59,8 @@ class Node:
     link: dict | None = None  # its link to the parent as the parent measures it (children only)
     vendor: dict | None = None  # name / model / software, from networkdiagnostic
     vendor_try: float = 0.0  # when the vendor data was last asked for (also when it failed)
+    child_timeout: int | None = None  # seconds, as the device itself announced it (MLE Timeout TLV)
+    behavior: dict = field(default_factory=dict)  # poll rhythm and parent searches, see behavior.py
     stats: NodeStats = field(default_factory=NodeStats)
     events: list = field(default_factory=list)  # {"ts", "kind", "params"}, oldest first, capped
     sig: dict | None = None  # state at the last tick, to detect changes (not persisted)
@@ -94,6 +97,8 @@ class Engine:
         self.diag_ttl = DIAG_TTL  # how long its answers count as current (the collector raises it for long intervals)
         self.diag_info: dict = {}  # status of the active collector, for the UI (not persisted)
         self.capture = NodeStats()  # all frames heard, including those without transmitter address (ACKs)
+        self.last_frame_any: float | None = None  # last frame the sniffer received (not persisted)
+        self.sniffer_outages: list[tuple[float, float]] = []  # periods without any frame: the sniffer was deaf
         self.pending_events: list[tuple[str, dict]] = []  # not yet saved
         self.dirty = False
 
@@ -220,9 +225,11 @@ class Engine:
         into.last_heard = max(into.last_heard, prov.last_heard)
         into.last_addressed = max(into.last_addressed, prov.last_addressed)
         into.last_diag = max(into.last_diag, prov.last_diag)
-        for attr in ("version", "link", "vendor"):
+        for attr in ("version", "link", "vendor", "child_timeout"):
             if getattr(into, attr) is None:
                 setattr(into, attr, getattr(prov, attr))
+        if not into.behavior:
+            into.behavior = prov.behavior
         into.vendor_try = max(into.vendor_try, prov.vendor_try)
         into.stats.merge(prov.stats)
         self.pending_events = [(nid, ev) for nid, ev in self.pending_events if nid != prov.id]
@@ -273,11 +280,43 @@ class Engine:
                      rssi: float | None = None, lqi: float | None = None, seq: int | None = None,
                      dst: str | None = None) -> None:
         """Statistics of one frame heard. node is None when the frame has no transmitter address (ACKs)."""
+        if self.last_frame_any is not None and ts - self.last_frame_any > B.SNIFFER_OUTAGE:
+            self.sniffer_outages.append((self.last_frame_any, ts))
+            del self.sniffer_outages[:-B.OUTAGES_KEPT]
+        self.last_frame_any = ts if self.last_frame_any is None else max(self.last_frame_any, ts)
         if node is not None:
-            node.stats.record_frame(ts, kind, length, rssi, lqi, seq, dst)
+            retry = node.stats.record_frame(ts, kind, length, rssi, lqi, seq, dst)
+            if kind == "poll" and not retry:
+                gap = B.on_poll(node.behavior, ts, self.sniffer_was_down)
+                if gap:
+                    self._log(node, ts, "poll_gap", timeout=node.child_timeout, **gap)
         self.capture.record_frame(ts, kind, length, rssi, lqi)
         self.clock = max(self.clock, ts)
         self.dirty = True
+
+    def sniffer_was_down(self, start: float, end: float) -> bool:
+        return any(s < end and e > start for s, e in self.sniffer_outages)
+
+    def on_parent_request(self, ts: float, node: Node | None) -> None:
+        """MLE Parent Request: the device looks for a parent. If it has one, it has lost the link to it."""
+        if node is not None and B.on_parent_request(node.behavior, ts):
+            self._log(node, ts, "parent_search", parent=self.parent_router_id(node))
+            self.dirty = True
+
+    def on_attach_request(self, ts: float, node: Node | None, parent: Node | None) -> None:
+        """MLE Child ID Request: the device chose a parent (the destination); ends a search."""
+        if node is None:
+            return
+        done = B.on_attach_request(node.behavior, ts)
+        if done:
+            to = A.router_id(parent.rloc16) if parent is not None and parent.rloc16 is not None else None
+            self._log(node, ts, "attached", to=to, **done)
+            self.dirty = True
+
+    def on_child_timeout(self, ts: float, node: Node | None, seconds: int) -> None:
+        if node is not None and 0 < seconds and node.child_timeout != seconds:
+            node.child_timeout = seconds
+            self.dirty = True
 
     def on_address_assignment(self, ts: float, ext: str | None, rloc16: int | None) -> None:
         """A parent told a child its new RLOC16 (Child ID Response): binds MAC address and short address."""
@@ -663,7 +702,7 @@ class Engine:
                         "id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
                         "border_router", "br_seen", "mac_confirmed", "first_seen", "last_seen", "last_heard",
                         "last_addressed", "parent_hint", "last_role", "version", "last_diag", "link", "vendor",
-                        "vendor_try")},
+                        "vendor_try", "child_timeout", "behavior")},
                      "stats": n.stats.to_json(),
                      "addresses": {a: list(t) for a, t in n.addresses.items()}}
                     for n in self.nodes.values()
@@ -700,6 +739,7 @@ class Engine:
         with self.lock:
             for d in state.get("nodes", []):
                 d = dict(d)
+                d["behavior"] = d.get("behavior") or {}  # written by an older version
                 stats = NodeStats.from_json(d.pop("stats", None))
                 node = Node(**{**d, "addresses": {a: list(t) for a, t in d.get("addresses", {}).items()}})
                 node.stats = stats

@@ -97,6 +97,14 @@ def codes(analysis, nid):
 
 
 class ActiveSeedTests(unittest.TestCase):
+    def test_the_demo_shows_the_behaviour_findings(self):
+        e = demo()
+        _, a = report(e, NOW + 1, {"running": True, "stats": {}})
+        self.assertEqual(codes(a, FLAPPER)["parent_searches"]["params"]["count"], 5)
+        self.assertEqual(codes(a, OLD_CHILD)["poll_gaps"]["severity"], "warn")       # longer than its timeout
+        self.assertEqual(e.nodes["a4c138fffe100002"].child_timeout, 240)
+        self.assertIsNone(e.nodes["a4c138fffe100001"].child_timeout)                 # always listening: no timeout announced here
+
     def test_plain_populate_has_no_active_data(self):
         e = Engine()
         populate(e, now=NOW, history=True)

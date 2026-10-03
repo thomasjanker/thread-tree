@@ -42,6 +42,7 @@ FIELDS: dict[str, list[str]] = {
     "route_cost": ["mle.tlv.route64.cost"],
     "route_in": ["mle.tlv.route64.nbr_in"],
     "route_out": ["mle.tlv.route64.nbr_out"],
+    "mle_timeout": ["mle.tlv.timeout"],
     "mode_ftd": ["mle.tlv.mode.device_type"],
     "mode_idle_rx": ["mle.tlv.mode.idle_rx"],
     "reg_ipv6": ["mle.tlv.addr_reg_ipv6"],
@@ -57,6 +58,8 @@ FIELDS: dict[str, list[str]] = {
 
 # MLE command IDs (Thread spec 4.5)
 MLE_ADVERTISEMENT = 4
+MLE_PARENT_REQUEST = 9  # a device looks for a parent
+MLE_CHILD_ID_REQUEST = 11  # ... and asks the one it chose (the destination)
 MLE_CHILD_ID_RESPONSE = 12  # parent -> child: carries the assigned Address16
 MLE_FROM_CHILD = (9, 11, 13)  # Parent Request, Child ID Request, Child Update Request
 MLE_CHILD_UPDATE_RESPONSE = 14  # from a child when its parent asked; from the parent otherwise
@@ -250,6 +253,15 @@ class Handler:
             if entries:
                 e.on_route64(ts, src16, entries)
 
+        if cmd == MLE_PARENT_REQUEST:
+            e.on_parent_request(ts, sender)
+        elif cmd == MLE_CHILD_ID_REQUEST:
+            dst64 = self._one(layers, "dst64")
+            dst16 = A.parse_rloc16(self._one(layers, "dst16") or "") if self._one(layers, "dst16") else None
+            parent = (e.nodes.get(A.normalize_ext(dst64)) if dst64 else None) or (
+                e.nodes.get(e.rloc_index.get(dst16, "")) if dst16 is not None else None)
+            e.on_attach_request(ts, sender, parent)
+
         if cmd == MLE_CHILD_ID_RESPONSE:
             addr16 = self._one(layers, "mle_addr16")
             dst64 = self._one(layers, "dst64")
@@ -260,6 +272,9 @@ class Handler:
             cmd == MLE_CHILD_UPDATE_RESPONSE and src16 is not None and A.is_valid_rloc16(src16)
             and not A.is_router_rloc(src16))  # the Source Address is a child's: the child answers its parent
         if from_child:
+            timeout = self._int(self._one(layers, "mle_timeout"))
+            if timeout is not None and cmd in (MLE_CHILD_ID_REQUEST, 13):  # the child announces its timeout
+                e.on_child_timeout(ts, sender, timeout)
             ftd = self._bool(self._one(layers, "mode_ftd"))
             idle = self._bool(self._one(layers, "mode_idle_rx"))
             if ftd is not None and idle is not None:
