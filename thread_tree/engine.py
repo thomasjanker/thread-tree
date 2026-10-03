@@ -107,6 +107,7 @@ class Engine:
         self.demo_outage: tuple | None = None  # demo only: (router id, since) switched off by an outage test
         self.sniffer_outages: list[tuple[float, float]] = []  # periods without any frame: the sniffer was deaf
         self.pending_events: list[tuple[str, dict]] = []  # not yet saved
+        self.events_cleared = False  # the log was cleared: the next save deletes the stored events
         self.dirty = False
 
     # ---- derived properties -------------------------------------------------
@@ -732,6 +733,18 @@ class Engine:
             self._net_log(ts, "routers", count=routers, before=before)
         self._net_state["routers"] = routers
 
+    def clear_events(self) -> dict:
+        """Clear the log: the history of every device and of the network (also in the database at the next save)."""
+        with self.lock:
+            removed = sum(len(n.events) for n in self.nodes.values()) + len(self.net_events)
+            for node in self.nodes.values():
+                node.events.clear()
+            self.net_events.clear()
+            self.pending_events.clear()
+            self.events_cleared = True
+            self.dirty = True
+            return {"events_removed": removed}
+
     def set_name(self, node_id: str, name: str | None) -> str | None:
         """Give a device a name; an empty name removes it. Returns the stored name."""
         with self.lock:
@@ -806,13 +819,15 @@ class Engine:
             bucket_updates = [(n.id, i, vals) for n in self.nodes.values() for i, vals in n.stats.bucket_rows()]
             bucket_updates += [(CAPTURE_ID, i, vals) for i, vals in self.capture.bucket_rows()]
             events_new = [(nid, ev["ts"], ev["kind"], ev["params"]) for nid, ev in self.pending_events]
+            events_cleared = self.events_cleared
             if clear_dirty:
+                self.events_cleared = False
                 for node in self.nodes.values():
                     node.stats.dirty.clear()
                 self.capture.dirty.clear()
                 self.pending_events = []
             return {
-                "bucket_updates": bucket_updates, "events_new": events_new,
+                "bucket_updates": bucket_updates, "events_new": events_new, "events_cleared": events_cleared,
                 "nodes": [
                     {**{k: getattr(n, k) for k in (
                         "id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
@@ -849,6 +864,7 @@ class Engine:
                     target.dirty.add(idx)
             self.pending_events = [(nid, {"ts": ts, "kind": kind, "params": params})
                                    for nid, ts, kind, params in state.get("events_new", [])] + self.pending_events
+            self.events_cleared = self.events_cleared or bool(state.get("events_cleared"))
             self.dirty = True
 
     def load_state(self, state: dict) -> None:

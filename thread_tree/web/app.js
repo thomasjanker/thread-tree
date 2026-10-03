@@ -20,6 +20,7 @@ function h(tag, attrs, ...kids) {
 function s(tag, attrs, ...kids) {
   const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
   for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v);
   }
   el.append(...kids.flat(Infinity).filter(k => k != null));
@@ -273,9 +274,9 @@ function renderDrawer() {
   fill(d,
     h('h2', {}, nodeName(n), roleChip(n.role), n.border_router ? abbr('BR') : null,
       n.diag_self ? h('span', { class: 'tag', title: t('diag.self.tip') }, t('diag.self')) : null,
-      h('button', { type: 'button', style: 'margin-left:auto', onclick: () => select(null), 'aria-label': t('legend.close') }, '×')),
+      h('button', { type: 'button', class: 'ibtn icon-only', style: 'margin-left:auto', onclick: () => select(null), 'aria-label': t('legend.close'), title: t('legend.close') }, icon('close'))),
     nameEditor(n),
-    n.placeholder ? null : h('p', {}, h('button', { type: 'button', onclick: () => openDiagNode(n.id) }, t('diag.open'))),
+    n.placeholder ? null : h('p', {}, iconButton('diag', t('diag.open'), { onclick: () => openDiagNode(n.id) })),
     h('dl', {},
       n.border_router ? dd(abbr('BR'), t('d.br').replace('{since}', ago(n.br_seen))) : [],
       dd(t('d.state'), n.online_indirect ? h('span', { title: t('online.indirect.tip') }, t('online.indirect')) : t(n.online ? 'online' : 'offline')),
@@ -428,21 +429,30 @@ function render() {
   document.documentElement.lang = state.lang;
   document.getElementById('title').textContent = t('title');
   document.title = t('title');
-  document.getElementById('legend-btn').textContent = t('legend');
-  document.getElementById('settings-btn').textContent = t('settings');
-  const rb = document.getElementById('rebuild-btn');
-  rb.textContent = t('rebuild');
-  rb.title = t('rebuild.tip');
-  rb.disabled = state.config?.can_name === false;  // same access rule as naming; the server enforces it
-  const db = document.getElementById('diag-btn');  // always reachable, also with an empty tree
-  const paused = !!state.status?.diagnostics_paused;
+  const label = (id, name, text, tip) => {
+    const el = document.getElementById(id);
+    fill(el, icon(name), h('span', {}, text));
+    el.className = 'ibtn';
+    el.title = tip || text;
+    return el;
+  };
+  label('legend-btn', 'legend', t('legend'));
+  label('settings-btn', 'settings', t('settings'));
+  label('rebuild-btn', 'rebuild', t('rebuild'), t('rebuild.tip')).disabled = state.config?.can_name === false;  // same rule as naming
+  const db = document.getElementById('diag-btn');  // a switch, always reachable, also with an empty tree
+  const on = !state.status?.diagnostics_paused;
   db.hidden = !state.status?.diagnostics;
-  db.textContent = t(paused ? 'header.diag.off' : 'header.diag.on');
+  db.setAttribute('role', 'switch');
+  db.setAttribute('aria-checked', String(on));
+  db.className = `switch${on ? ' on' : ''}`;
   db.title = t('header.diag.tip');
-  db.className = paused ? 'diag-off' : '';
   db.disabled = state.config?.can_name === false;
+  fill(db, icon('antenna'), h('span', {}, t('header.diag')), h('span', { class: 'track' }, h('span', { class: 'knob' })),
+    h('span', { class: 'state' }, t(on ? 'header.diag.state_on' : 'header.diag.state_off')));
   const views = document.getElementById('views');
-  views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === state.view), onclick: () => { state.view = v; render(); if (['diag', 'tests', 'log'].includes(v)) poll(); } }, t('view.' + v))));
+  const VIEW_ICONS = { tree: 'tree', mesh: 'mesh', table: 'table', diag: 'diag', tests: 'tests', log: 'log' };
+  views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', class: 'ibtn', 'aria-selected': String(v === state.view),
+    onclick: () => { state.view = v; render(); if (['diag', 'tests', 'log'].includes(v)) poll(); } }, icon(VIEW_ICONS[v]), h('span', {}, t('view.' + v)))));
 
   const st = state.status, pe = document.getElementById('status'), banner = document.getElementById('banner');
   let msg = null, settingsLink = false;

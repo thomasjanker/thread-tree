@@ -114,6 +114,8 @@ class Store:
             db.executemany("INSERT INTO link_metrics VALUES (?,?,?)",
                            [(m["src"], m["dst"], json.dumps(m["data"])) for m in state.get("link_metrics", [])])
             db.execute("INSERT OR REPLACE INTO meta VALUES ('engine', ?)", (json.dumps(state["meta"]),))
+            if state.get("events_cleared"):  # the log was cleared in the UI
+                db.execute("DELETE FROM events")
             # statistics: only the buckets that changed; events: only the new ones
             db.executemany("INSERT OR REPLACE INTO node_buckets VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                            [(node_id, idx, *values) for node_id, idx, values in state.get("bucket_updates", [])])

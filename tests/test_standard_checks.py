@@ -223,3 +223,38 @@ class LogApiTests(ApiFixture, unittest.TestCase):
         status, body = self.call("GET", "/api/export/log.csv?level=warn")
         self.assertEqual(status, 200)
         self.assertEqual(len(body.decode().strip().splitlines()), 2)
+
+
+class ClearLogTests(ApiFixture, unittest.TestCase):
+    def test_clearing_removes_every_event_also_in_the_database(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "t.sqlite")
+            e = Engine()
+            node = e.on_frame(T0, CHILD, 0x2401)
+            e._log(node, T0 + 1, "reboot", how="reset", **{"from": 9, "to": 1})
+            e._net_log(T0 + 2, "routers", count=1, before=0)
+            store.save(e.export_state(clear_dirty=True))
+            self.assertEqual(e.clear_events(), {"events_removed": 3})   # first_seen, reboot, routers
+            e._net_log(T0 + 5, "routers", count=2, before=1)            # what happens after the clearing stays
+            store.save(e.export_state(clear_dirty=True))
+            e2 = Engine()
+            e2.load_state(store.load())
+        self.assertEqual(e2.nodes[CHILD].events, [])
+        self.assertEqual([ev["params"]["count"] for ev in e2.net_events], [2])
+
+    def test_a_failed_save_clears_on_the_next_one(self):
+        e = Engine()
+        e.on_frame(T0, CHILD, 0x2401)
+        e.clear_events()
+        state = e.export_state(clear_dirty=True)
+        self.assertTrue(state["events_cleared"])
+        e.restore_unsaved(state)
+        self.assertTrue(e.export_state()["events_cleared"])
+
+    def test_the_endpoint(self):
+        self.engine.on_frame(1000.0, "ab" * 8, 0x0800)
+        status, data = self.call("POST", "/api/log/clear", "{}", {"Content-Type": "application/json"})
+        self.assertEqual(status, 200)
+        self.assertGreaterEqual(json.loads(data)["events_removed"], 1)
+        self.assertEqual(json.loads(self.call("GET", "/api/log")[1])["entries"], [])
+        self.assertEqual(self.call("POST", "/api/log/clear", "{}", {"Content-Type": "application/json", "Origin": "http://evil.example"})[0], 403)

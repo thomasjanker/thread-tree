@@ -6,6 +6,17 @@ async function loadLog() {
   state.log = await fetch(`/api/log?level=${level}&limit=2000`).then(r => r.json());
 }
 
+async function clearLog() {
+  if (!confirm(t('log.clear.confirm'))) return;
+  try {
+    const res = await fetch('/api/log/clear', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.status);
+    notify(fillTemplate(t('log.cleared'), { n: data.events_removed }, (k, v) => v));
+    poll();
+  } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
+}
+
 function logRows() {
   const q = (state.logFilter || '').trim().toLowerCase();
   return (state.log?.entries || []).map(e => {
@@ -33,7 +44,9 @@ function renderLog() {
     h('td', {}, text)));
   return h('div', { class: 'diag' },
     h('div', { class: 'diag-head' }, h('h2', {}, t('view.log')),
-      h('a', { class: 'btnlink', href: `/api/export/log.csv${level === 'warn' ? '?level=warn' : ''}`, download: 'thread-tree-log.csv' }, t('log.export'))),
+      iconButton('download', t('log.export'), { href: `/api/export/log.csv${level === 'warn' ? '?level=warn' : ''}`, download: 'thread-tree-log.csv' }),
+      iconButton('trash', t('log.clear'), { class: 'danger', onclick: clearLog, disabled: state.config?.can_name === false ? 'disabled' : null }),
+      h('span', { class: 'muted small' }, t('log.auto'))),
     h('div', { class: 'toolbar' }, h('nav', { class: 'segmented' }, tab('all', 'log.all'), tab('warn', 'log.warn')), input),
     rows.length ? h('div', { class: 'tablewrap' }, h('table', { class: 'logtable' },
       h('thead', {}, h('tr', {}, ...['log.col.time', 'log.col.severity', 'log.col.device', 'log.col.event'].map(k => h('th', {}, t(k))))),

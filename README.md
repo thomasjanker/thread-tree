@@ -198,7 +198,9 @@ The **Log** tab lists all recorded events, newest first (30 days, 200 per device
 devices (role, parent, short address, online/offline, gaps, searches, the checks above) and those of the network as a
 whole (leader change, new partition, split and merge, border routers added or removed, number of routers, Network Data
 version). Warnings are the breaches of the standard and losses (offline, leader change, split, a router or border
-router lost, gaps beyond the child timeout); filter "Warnings only", text filter, CSV export.
+router lost, gaps beyond the child timeout); filter "Warnings only", text filter, CSV export; it updates itself every 3 s, is
+stored in the database, and "Clear log" deletes it (the histories of all devices and of the network; devices, names
+and statistics stay).
 
 ## Guided tests
 
@@ -344,7 +346,7 @@ firmware/nordic-sniffer/  Nordic's sniffer firmware, unmodified (own license)
 `/api/log?level=warn&limit=1000`, `/api/export/log.csv`;
 `POST /api/config/dataset` `{"dataset": "<hex>"}`, `DELETE /api/config/dataset`, `PUT /api/nodes/<id>/name`
 `{"name": "…"}`, `POST /api/topology/reset`, `/api/diagnostics/run`, `/api/diagnostics/enabled` `{"enabled": true}`,
-`/api/tests/start` `{"kind": "router_outage", "target": "<id>"}`, `/api/tests/stop`.
+`/api/tests/start` `{"kind": "router_outage", "target": "<id>"}`, `/api/tests/stop`, `/api/log/clear`.
 
 Matter support is planned as a later extension; the graph model is transport-agnostic.
 

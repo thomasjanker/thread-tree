@@ -122,7 +122,7 @@ function testReport(r) {
     : kind === 'device_rejoin' ? rejoinFacts(r) : [];
   return h('div', { class: `card test${r.running ? ' running' : ''}` },
     h('div', { class: 'finding-head' }, h('strong', {}, title),
-      r.running ? h('button', { type: 'button', onclick: stopTest, disabled: state.config?.can_name === false ? 'disabled' : null }, t('diag.test.stop'))
+      r.running ? iconButton('stop', t('diag.test.stop'), { onclick: stopTest, disabled: state.config?.can_name === false ? 'disabled' : null })
         : h('span', { class: 'muted small' }, absTime(r.start))),
     r.running ? h('p', {}, tfill(`tests.${kind}.do`, { name })) : null,
     h('dl', { class: 'facts' }, fact(t('diag.test.duration'), fmtDuration(r.duration)), facts),
@@ -144,7 +144,7 @@ function testCard(kind, what, running) {
     h('h3', {}, t(`tests.${kind}.title`)), h('p', {}, t(`tests.${kind}.desc`)),
     what && !options.length ? h('p', { class: 'muted' }, t('tests.none')) :
       h('div', { class: 'toolbar' }, select ? h('label', {}, t('tests.pick'), ' ', select) : null,
-        h('button', { type: 'button', disabled: blocked ? 'disabled' : null, onclick: () => startTest(kind, what ? state.testTarget[kind] : null) }, t('tests.start'))));
+        iconButton('play', t('tests.start'), { disabled: blocked ? 'disabled' : null, onclick: () => startTest(kind, what ? state.testTarget[kind] : null) })));
 }
 
 function renderTests() {

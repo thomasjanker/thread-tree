@@ -175,7 +175,7 @@ function activeCard(active) {
   const silent = active.failures || [];
   return card(t('diag.card.active'), t('diag.state.' + String(active.state || 'starting').replace(/ /g, '_')), sub,
     h('div', { class: 'card-actions' },
-      h('button', { type: 'button', disabled: state.config?.can_name === false || active.paused ? 'disabled' : null, onclick: askNow }, t('diag.active.ask')),
+      iconButton('refresh', t('diag.active.ask'), { disabled: state.config?.can_name === false || active.paused ? 'disabled' : null, onclick: askNow }),
       active.paused ? h('p', { class: 'card-sub' }, t('diag.active.paused_note')) : null,
       silent.length ? h('p', { class: 'card-sub' }, fillTemplate(t('diag.active.failures'), { n: silent.length, names: silent.map(name).join(', ') }, (k, v) => v)) : null));
 }
@@ -293,7 +293,7 @@ function renderDiagOverview() {
   const findings = allFindings();
   return h('div', { class: 'diag' },
     h('div', { class: 'diag-head' }, h('h2', {}, t('view.diag')), sevChip(state.diag.summary.status),
-      h('a', { class: 'btnlink', href: '/api/export/nodes.csv', download: 'thread-tree-nodes.csv' }, t('diag.export.csv'))),
+      iconButton('download', t('diag.export.csv'), { href: '/api/export/nodes.csv', download: 'thread-tree-nodes.csv' })),
     overviewCards(state.diag.summary),
     section('diag.findings.title', findingList(findings),
       h('p', { class: 'muted small' }, t(state.diag.summary.active && state.diag.summary.active.enabled ? 'diag.note.active' : 'diag.note.passive'))),
@@ -449,7 +449,7 @@ function historySection(d) {
 }
 
 function renderNodeDiag() {
-  const back = h('button', { type: 'button', onclick: closeDiagNode }, '← ' + t('diag.back'));
+  const back = iconButton('back', t('diag.back'), { onclick: closeDiagNode });
   const d = state.diagDetail;
   if (!d || d.id !== state.diagNode) return h('div', { class: 'diag' }, h('div', { class: 'diag-head' }, back), h('div', { class: 'empty' }, t('diag.loading')));
   const n = state.topo && state.topo.nodes[d.id];
@@ -468,8 +468,8 @@ function renderNodeDiag() {
   return h('div', { class: 'diag' },
     h('div', { class: 'diag-head' }, back, h('h2', {}, title), roleChip(d.role), d.border_router ? abbr('BR') : null,
       d.diag_self ? h('span', { class: 'tag', title: t('diag.self.tip') }, t('diag.self')) : null, sevChip(d.status),
-      n ? h('button', { type: 'button', onclick: () => { state.view = 'tree'; state.selected = d.id; render(); } }, t('diag.show_in_tree')) : null,
-      h('a', { class: 'btnlink', href: `/api/nodes/${encodeURIComponent(d.id)}/diagnostics`, download: `thread-tree-${d.id}.json` }, t('diag.export.json'))),
+      n ? iconButton('locate', t('diag.show_in_tree'), { onclick: () => { state.view = 'tree'; state.selected = d.id; render(); } }) : null,
+      iconButton('json', t('diag.export.json'), { href: `/api/nodes/${encodeURIComponent(d.id)}/diagnostics`, download: `thread-tree-${d.id}.json` })),
     facts,
     d.findings.length ? section('diag.findings.title', d.findings.map(f => findingRow(f, null))) : null,
     behaviorSection(d), signalSection(d), trafficSection(d), timingSection(d), linksSection(d), parentSection(d), parentLinkSection(d), childrenSection(d),

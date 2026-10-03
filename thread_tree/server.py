@@ -233,6 +233,8 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                                     with_body=True)
             if path == "/api/tests/router-outage":
                 return self._action(lambda body: controller.start_router_test(_text(body, "router")), with_body=True)
+            if path == "/api/log/clear":
+                return self._action(engine.clear_events)
             if path == "/api/tests/stop":
                 return self._action(controller.stop_test)
             if path == "/api/diagnostics/enabled":
