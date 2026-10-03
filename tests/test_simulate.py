@@ -64,6 +64,14 @@ class SeedTests(unittest.TestCase):
         self.assertGreater(weak, 0.15)
         self.assertLess(good, 0.05)
 
+    def test_the_moving_child_never_takes_another_childs_short_address(self):
+        e = seeded()
+        sim = Simulator(e, interval=5.0)
+        sim.rng.random = lambda: 0.0           # the child moves in every step
+        for i in range(10):
+            sim.step(NOW + 5 * (i + 1))
+        self.assertEqual([n.id for n in e.nodes.values() if n.rloc16 is None], [])
+
     def test_a_live_step_adds_traffic_and_keeps_indirect_nodes_addressed(self):
         e = seeded()
         before = e.nodes[BR].stats.frames

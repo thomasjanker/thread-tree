@@ -70,8 +70,17 @@ class EventTests(unittest.TestCase):
         e.on_frame(T + 2, "cc" * 8, (9 << 10) | 1)
         e.tick(T + 3)
         by_kind = {ev["kind"]: ev["params"] for ev in child.events}
-        self.assertEqual(by_kind["parent"], {"from": 5, "to": 9})
-        self.assertEqual(by_kind["rloc16"], {"from": "0x1401", "to": "0x2401"})
+        self.assertEqual(by_kind["parent"], {"from": 5, "to": 9, "rloc16_from": "0x1401", "rloc16_to": "0x2401"})
+        self.assertNotIn("rloc16", by_kind)  # one event, not two, for one move
+
+    def test_a_short_address_change_without_a_new_parent_is_its_own_event(self):
+        e = Engine()
+        child = e.on_frame(T, "cc" * 8, (5 << 10) | 1)
+        e.tick(T + 1)
+        e.on_frame(T + 2, "cc" * 8, (5 << 10) | 7)       # same router, new child ID
+        e.tick(T + 3)
+        self.assertEqual([(ev["kind"], ev["params"]) for ev in child.events if ev["kind"] != "first_seen"],
+                         [("rloc16", {"from": "0x1401", "to": "0x1407"})])
 
     def test_online_and_offline(self):
         e = Engine()

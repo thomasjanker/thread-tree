@@ -89,3 +89,78 @@ dl.info dt { color: var(--muted); } dl.info dd { margin: 0; }
 .name-editor label { color: var(--muted); font-size: 12px; font-weight: 600; }
 .name-editor .toolbar { margin: 4px 0; }
 .name-editor input.wide { flex: 1; min-width: 0; }
+
+/* ---- diagnosis view ---- */
+:root { --ok: #1a7f4b; --info: #2f6fb3; --warn: #b45309; --crit: #c1121f; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { --ok: #4cc38a; --info: #6fa8f5; --warn: #f0a050; --crit: #ff6b6b; }
+}
+.diag { max-width: 1100px; margin: 0 auto; }
+.diag-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 14px; }
+.diag-head h2 { margin: 0; font-size: 18px; }
+.btnlink { border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; color: var(--text); text-decoration: none; background: var(--surface); }
+.btnlink:hover { border-color: var(--accent); }
+.dsec { margin: 22px 0; }
+.dsec h3 { font-size: 14px; margin: 0 0 10px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+.dsec h4 { font-size: 12px; font-weight: 600; margin: 14px 0 4px; color: var(--muted); }
+.small { font-size: 12px; }
+.sev { display: inline-block; padding: 0 8px; border-radius: 9px; font-size: 11px; font-weight: 600; color: #fff; }
+.sev-ok { background: var(--ok); } .sev-info { background: var(--info); } .sev-warn { background: var(--warn); } .sev-crit { background: var(--crit); }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: var(--ok); }
+.dot-info { background: var(--info); } .dot-warn { background: var(--warn); } .dot-crit { background: var(--crit); }
+.dot-svg { stroke: var(--surface); stroke-width: 1.5; }
+.dot-svg.dot-warn { fill: var(--warn); } .dot-svg.dot-crit { fill: var(--crit); }
+.diag-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 8px; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+.card-title { font-size: 12px; color: var(--muted); }
+.card-value { font-size: 24px; font-weight: 600; line-height: 1.3; }
+.card-sub { font-size: 12px; color: var(--muted); }
+.meter { height: 6px; border-radius: 3px; background: var(--line); margin-top: 6px; overflow: hidden; }
+.meter-fill { height: 100%; background: var(--accent); }
+.lqdist { display: flex; gap: 10px; margin-top: 6px; font-size: 12px; }
+.lqchip { display: inline-flex; align-items: center; gap: 3px; }
+.finding { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--info); border-radius: 6px; padding: 8px 12px; margin: 8px 0; }
+.finding.sev-warn { border-left-color: var(--warn); } .finding.sev-crit { border-left-color: var(--crit); }
+.finding.sev-info { border-left-color: var(--info); } .finding.sev-ok { border-left-color: var(--ok); }
+.finding .sev { color: #fff; }
+.finding-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.finding p { margin: 4px 0; }
+.finding summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.nodelink { color: var(--accent); }
+.tablewrap { overflow-x: auto; }
+table.diagtable th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+table.diagtable th.sortable:hover { color: var(--text); }
+td.num, th.num { text-align: right; white-space: nowrap; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.tile-value { font-size: 18px; font-weight: 600; }
+.tile-label { font-size: 12px; color: var(--muted); }
+.facts { display: grid; grid-template-columns: max-content 1fr max-content 1fr; gap: 4px 16px; margin: 0 0 8px; }
+.facts dt { color: var(--muted); } .facts dd { margin: 0; }
+@media (max-width: 720px) { .facts { grid-template-columns: max-content 1fr; } }
+.chart { width: 100%; height: auto; display: block; }
+.ch-grid { stroke: var(--line); stroke-width: 1; }
+.ch-axis { fill: var(--muted); font-size: 10px; }
+.ch-bar { fill: var(--accent); } .ch-retry { fill: var(--crit); }
+.ch-hit { fill: transparent; } .ch-hit:hover { fill: color-mix(in srgb, var(--accent) 12%, transparent); }
+.ch-band { stroke: var(--accent); stroke-width: 3; opacity: .35; }
+.ch-dot { fill: var(--accent); } .ch-line { fill: none; stroke: var(--accent); stroke-width: 1.4; }
+.ch-weak { stroke: var(--warn); stroke-dasharray: 5 4; stroke-width: 1; }
+.lq-on.lq-3 { fill: var(--ok); } .lq-on.lq-2 { fill: var(--warn); } .lq-on.lq-1 { fill: var(--crit); } .lq-off { fill: var(--line); }
+.lqpair { display: inline-flex; align-items: center; gap: 2px; white-space: nowrap; }
+.kindbar { display: flex; height: 14px; border-radius: 7px; overflow: hidden; margin: 8px 0 4px; background: var(--line); }
+.kind { min-width: 2px; }
+.kind-data { background: #3b82c4; } .kind-adv { background: #7b3fc4; } .kind-mle { background: #a855a8; }
+.kind-poll { background: #c2410c; } .kind-cmd { background: #b86e00; } .kind-beacon { background: #0f8a6d; }
+.kind-ack { background: #8a94a3; } .kind-other { background: #5d6b7c; }
+.kindlegend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+.swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 4px; }
+.timeline { list-style: none; margin: 0; padding: 0; border-left: 2px solid var(--line); }
+.timeline li { padding: 4px 0 4px 14px; position: relative; }
+.timeline li::before { content: ''; position: absolute; left: -6px; top: 10px; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); }
+.timeline li.ev-offline::before { background: var(--crit); } .timeline li.ev-online::before { background: var(--ok); }
+.timeline li.ev-parent::before, .timeline li.ev-rloc16::before, .timeline li.ev-role::before { background: var(--warn); }
+.ev-time { color: var(--muted); font-size: 12px; margin-right: 10px; white-space: nowrap; }
+details.minor { margin-top: 10px; }
+details.minor > summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
+.toolbar input[type="search"] { flex: 1; min-width: 240px; max-width: 480px; }

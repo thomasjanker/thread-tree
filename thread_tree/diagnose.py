@@ -31,7 +31,17 @@ MANY_OFFLINE = 0.3
 LEADER_CHANGES_WARN = 2
 
 
+# Every code a finding can have; the UI needs a title, a text and a hint for each (tested in both languages).
+FINDING_CODES = (
+    "offline", "single_link", "weak_links", "asymmetric_link", "critical_router", "adv_fast", "role_flap",
+    "unknown_parent", "parent_offline", "reparenting", "retry_high", "signal_weak", "indirect_only", "no_mac",
+    "sniffer_silent", "decrypt_failing", "partitions", "no_border_router", "single_border_router", "router_limit",
+    "router_near_limit", "leader_changes", "many_offline",
+)
+
+
 def finding(code: str, severity: str, **params) -> dict:
+    assert code in FINDING_CODES, code
     return {"code": code, "severity": severity, "params": params}
 
 

@@ -73,6 +73,11 @@ PROFILES = {
     "a4c138fffe100006": (-77, 40, 0.04, 0),    # MED
 }
 FLAPPER = "a4c138fffe100005"
+
+
+def _flapper_rloc(parent: int) -> int:
+    """Its short address at a router; the child ID differs per router so it never collides with another child."""
+    return (parent << 10) | (1 if parent == 17 else 8)
 _ROUTER_EXT = {ext for ext, _, _ in ROUTERS.values()}
 BUCKET = 600
 
@@ -140,8 +145,8 @@ def seed_history(engine: Engine, now: float, hours: int = 24, seed: int = 7) -> 
             parents = [17, 9, 17, 9, 17, 9]
             for i, (old, new) in enumerate(zip(parents, parents[1:])):
                 ts = now - (len(parents) - i) * 1800
-                engine._log(flapper, ts, "parent", **{"from": old, "to": new})
-                engine._log(flapper, ts, "rloc16", **{"from": f"0x{(old << 10) | 1:04x}", "to": f"0x{(new << 10) | 1:04x}"})
+                engine._log(flapper, ts, "parent", **{"from": old, "to": new},
+                            rloc16_from=f"0x{_flapper_rloc(old):04x}", rloc16_to=f"0x{_flapper_rloc(new):04x}")
         for node in engine.nodes.values():
             node.events.sort(key=lambda e: e["ts"])
 
@@ -192,7 +197,7 @@ class Simulator(threading.Thread):
             flapper = self.engine.nodes.get(FLAPPER)
             if flapper is not None and self.rng.random() < 0.02:  # now and then it moves to the other router
                 new_parent = 9 if flapper.rloc16 and (flapper.rloc16 >> 10) == 17 else 17
-                self.engine.on_frame(now, FLAPPER, (new_parent << 10) | 1)
+                self.engine.on_frame(now, FLAPPER, _flapper_rloc(new_parent))
             self.engine.dirty = True
 
     def run(self) -> None:

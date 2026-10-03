@@ -2,8 +2,9 @@
 
 const ROLES = ['leader', 'router', 'fed', 'med', 'sed', 'child', 'unknown'];
 const TYPES = ['rloc', 'aloc', 'ml-eid', 'omr', 'link-local'];
-const VIEWS = ['tree', 'mesh', 'table'];
-const state = { notice: null, lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '' };
+const VIEWS = ['tree', 'mesh', 'table', 'diag'];
+const state = { notice: null, lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '',
+  diag: null, diagNode: null, diagDetail: null, diagFilter: '', diagSort: { key: 'status', dir: -1 } };
 
 // ---- helpers ---------------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -105,6 +106,9 @@ function nodeCard(n, x, y, onclick) {
   g.append(s('text', { x: 40, y: 31, class: 'sub' }, [n.rloc16, n.placeholder ? '' : roleLabel(n.role)].filter(Boolean).join(' · ')));
   if (!n.placeholder && !n.heard) {  // known only from other nodes' traffic
     g.append(s('circle', { cx: CARD_W - 12, cy: CARD_H - 11, r: 5, class: 'indirect' }, s('title', {}, t('reach.indirect'))));
+  }
+  if (n.health === 'warn' || n.health === 'crit') {  // something to look at: see the Diagnosis view
+    g.append(s('circle', { cx: 6, cy: 6, r: 5, class: `dot-svg dot-${n.health}` }, s('title', {}, t('sev.' + n.health))));
   }
   if (n.border_router) {
     g.append(s('rect', { x: CARD_W - 30, y: 5, width: 24, height: 15, rx: 4, class: 'badge-br' }));
@@ -244,6 +248,7 @@ function renderDrawer() {
     h('h2', {}, nodeName(n), roleChip(n.role), n.border_router ? abbr('BR') : null,
       h('button', { type: 'button', style: 'margin-left:auto', onclick: () => select(null), 'aria-label': t('legend.close') }, '×')),
     nameEditor(n),
+    n.placeholder ? null : h('p', {}, h('button', { type: 'button', onclick: () => openDiagNode(n.id) }, t('diag.open'))),
     h('dl', {},
       n.border_router ? dd(abbr('BR'), t('d.br').replace('{since}', ago(n.br_seen))) : [],
       dd(t('d.state'), n.online_indirect ? h('span', { title: t('online.indirect.tip') }, t('online.indirect')) : t(n.online ? 'online' : 'offline')),
@@ -275,7 +280,8 @@ function renderLegend() {
       [h('span', {}, '◌'), h('span', {}, t('legend.offline'))],
       [h('span', { class: 'tag reach-indirect' }, t('reach.indirect')), h('span', {}, t('legend.indirect'))],
       [h('span', { class: 'tag reach-direct' }, t('reach.direct')), h('span', {}, t('legend.direct'))],
-      [h('span', { class: 'tag' }, t('online.indirect')), h('span', {}, t('online.indirect.tip'))]),
+      [h('span', { class: 'tag' }, t('online.indirect')), h('span', {}, t('online.indirect.tip'))],
+      [h('span', { class: 'dot dot-warn' }), h('span', {}, t('legend.health'))]),
     h('h3', {}, t('legend.edges')),
     grid([h('span', { class: 'chip', style: 'background:var(--router)' }, '━'), t('legend.edge.link')],
       [h('span', { class: 'chip', style: 'background:var(--line);color:var(--text)' }, '─'), t('legend.edge.child')],
@@ -397,7 +403,7 @@ function render() {
   rb.title = t('rebuild.tip');
   rb.disabled = state.config?.can_name === false;  // same access rule as naming; the server enforces it
   const views = document.getElementById('views');
-  views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === state.view), onclick: () => { state.view = v; render(); } }, t('view.' + v))));
+  views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === state.view), onclick: () => { state.view = v; render(); if (v === 'diag') poll(); } }, t('view.' + v))));
 
   const st = state.status, pe = document.getElementById('status'), banner = document.getElementById('banner');
   let msg = null, settingsLink = false;
@@ -422,9 +428,10 @@ function render() {
   const p = partitionData();
   if (!p || Object.values(topo.nodes).filter(n => !n.placeholder).length === 0) { view.replaceChildren(h('div', { class: 'empty' }, t('empty'))); renderDrawer(); return; }
   const scroll = [view.scrollLeft, view.scrollTop];
-  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : renderTable(p));
+  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : state.view === 'table' ? renderTable(p) : renderDiagnose());
   [view.scrollLeft, view.scrollTop] = scroll;
-  renderDrawer();
+  if (state.view === 'diag') document.getElementById('drawer').hidden = true;
+  else renderDrawer();
 }
 
 async function poll() {
@@ -432,6 +439,7 @@ async function poll() {
   try {
     const [topo, status] = await Promise.all([fetch('/api/topology').then(r => r.json()), fetch('/api/status').then(r => r.json())]);
     state.topo = topo; state.status = status;
+    if (state.view === 'diag') await loadDiagnostics();
   } catch (err) {
     statusEl.textContent = '⚠'; statusEl.title = String(err);  // server unreachable
     return;

@@ -398,11 +398,14 @@ class Engine:
                     continue
                 if sig["role"] != old["role"]:
                     self._log(node, now, "role", **{"from": old["role"], "to": sig["role"]})
-                if sig["rloc16"] != old["rloc16"]:
-                    hexed = lambda v: None if v is None else f"0x{v:04x}"
-                    self._log(node, now, "rloc16", **{"from": hexed(old["rloc16"]), "to": hexed(sig["rloc16"])})
+                hexed = lambda v: None if v is None else f"0x{v:04x}"
                 if sig["parent"] != old["parent"]:
-                    self._log(node, now, "parent", **{"from": old["parent"], "to": sig["parent"]})
+                    params = {"from": old["parent"], "to": sig["parent"]}
+                    if sig["rloc16"] != old["rloc16"]:  # an end device's short address follows its parent: one event
+                        params.update(rloc16_from=hexed(old["rloc16"]), rloc16_to=hexed(sig["rloc16"]))
+                    self._log(node, now, "parent", **params)
+                elif sig["rloc16"] != old["rloc16"]:
+                    self._log(node, now, "rloc16", **{"from": hexed(old["rloc16"]), "to": hexed(sig["rloc16"])})
                 if sig["partition"] != old["partition"]:
                     self._log(node, now, "partition", **{"from": old["partition"], "to": sig["partition"]})
                 if sig["br"] != old["br"]:

@@ -60,8 +60,48 @@ network be learned again, e.g. after devices were removed or moved. Names are ke
 reappear when a device is seen again; names of nodes known only by short address are dropped. The Thread dataset and
 the capture are not touched. Same access rule as naming.
 
-State is stored in SQLite (`--db`, default `./thread-tree.sqlite`) every 10 s and on SIGTERM/Ctrl+C,
-so nodes, roles and addresses survive restarts (nodes unseen for 30 days are pruned).
+State is stored in SQLite (`--db`, default `./thread-tree.sqlite`) every 30 s and on SIGTERM/Ctrl+C, so nodes, roles,
+addresses, statistics and history survive restarts (nodes unseen for 30 days are pruned). Statistics are written
+incrementally (only the 10-minute buckets that changed), the database runs in WAL mode: little write load for an SD card.
+
+## Diagnosis view
+
+The **Diagnosis** tab (the header buttons: Tree, Mesh, Table, Diagnosis) turns what the sniffer hears into numbers and
+findings. A coloured dot on a card in the tree marks nodes with a warning or critical finding.
+
+- **Overview:** devices online/offline, router count (limit 32), partitions, border routers, router links (current, stale,
+  quality), last frame / decryption rate of the capture, observation start; the findings of the network and of all
+  devices (warnings and critical ones open, plain notes folded away); a sortable, filterable table with frames per hour,
+  retransmissions, RSSI, advertisement or poll interval, children, last heard. CSV export of that table.
+- **Device page** (click a row, or "Open diagnosis" in the detail panel): findings with an explanation and what to do;
+  signal (RSSI average/min/max, LQI, 24 h chart with the weak threshold, distribution); traffic (frames by kind,
+  retransmissions, data volume, frames other devices addressed to it, 24 h activity chart); timing (advertisement or poll
+  interval); router links with quality in/out; parent or children; history of events; addresses; JSON download.
+- **History** (kept 30 days, 200 per device): first seen, role, parent (with the short address that came with it), short
+  address, partition, border router, online/offline, MAC address learned.
+
+All of it is measured **at the sniffer**: RSSI/LQI are what the sniffer received, retransmissions are repeated frames it
+heard (same sequence number to the same destination within 0.5 s), "frames/h" counts what reached it. A device far from
+the sniffer looks weak and quiet without being so; findings are hints, not proof.
+
+| Finding | Severity | When |
+|---|---|---|
+| Offline | critical for a leader or a router with children, else warning | no frame for longer than usual for its role (routers 15 min, sleepy devices 6 h) |
+| Critical router | warning | removing it splits the known router mesh; says how many routers/devices are cut off |
+| Router with a single link | warning | only one fresh two-way link, at least 3 routers |
+| All links weak / uneven link | warning / note | all links LQ 1 / in and out differ by 2 or more |
+| Changes parent often | warning | 3 or more parent changes in 24 h |
+| Router changes address or role often | warning | 3 or more in 24 h |
+| Many retransmissions | warning | 15 % or more of at least 50 frames (24 h) |
+| Very frequent advertisements | warning | more than 360 per hour after 30 min of observation (stable: about 110) |
+| Weak signal at the sniffer | note | average below -85 dBm over at least 20 measurements |
+| Parent offline / unknown, not heard directly, MAC unknown | warning / notes | |
+| Network: sniffer silent, decryption failing | critical | no frame for 60 s while capturing / more failures than successes |
+| Network: partitions, leader changes, many offline, router limit | warning | |
+| Network: no / single border router, near the router limit | note | |
+
+The thresholds are constants at the top of `thread_tree/diagnose.py`. API: `/api/diagnostics` (summary and findings),
+`/api/nodes/<id>/diagnostics` (device page as JSON), `/api/export/nodes.csv`; `/api/topology` carries a `health` per node.
 
 ## Raspberry Pi + Nordic nRF 802.15.4 sniffer (setup that worked in testing)
 
@@ -112,13 +152,17 @@ in the [releases](https://github.com/thomasjanker/thread-tree/releases/tag/firmw
 ## Verification status (honest)
 
 Verified here: engine, topology, persistence, dataset parser, address math, EK adapter logic
-(on synthetic EK input), CLI, server endpoints, graceful SIGTERM flush.
+(on synthetic EK input), CLI, server endpoints, graceful SIGTERM flush, statistics, history, findings, restart round trip.
+The diagnosis statistics rely on Wireshark fields taken from its field reference and source (`wpan-tap.rss`, `wpan-tap.lqi`,
+`wpan.seq_no`, `wpan.frame_type`, `frame.len`, `wpan-tap.length`); they are resolved against `tshark -G fields` at startup
+and a missing one disables only that statistic (with a warning), but they have not been seen on real traffic yet.
 **Not verified (no hardware / tshark / browser in the dev environment):**
 1. Real tshark output: field names come from the Wireshark field reference and are resolved against
    `tshark -G fields` at startup (missing ones disable a feature and log a warning), but EK key naming
    and Route64 entry alignment are untested on real traffic.
 2. Decryption option `uat:ieee802154_keys:"<key>","1","Thread hash"` in `capture.py`.
-3. The web UI has only been read through, not rendered in a browser.
+3. The web UI was rendered headless in Firefox (demo data, light and dark, English and German); it has not been used
+   on a real network yet.
 4. The ESP32-C6 pcap bridge (`cmd:` source). The nRF extcap piping (`--fifo /dev/stdout` into `tshark -r -`) was confirmed
    on a Raspberry Pi 2: frames, Thread PAN, RLOC16s and link-local addresses decode as expected.
 
@@ -129,14 +173,17 @@ next to `thread-tree run --source pcap:cap.pcapng`, and compare.
 
 ```
 thread_tree/addresses.py  EUI-64 / RLOC16 / IPv6 classification
-thread_tree/engine.py     observations -> persistent node model
+thread_tree/engine.py     observations -> persistent node model, history events (tick)
+thread_tree/stats.py      per-node counters, RSSI, intervals, 10-minute buckets
+thread_tree/diagnose.py   findings, network summary, device detail, CSV
+thread_tree/presence.py   online/offline rules
 thread_tree/topology.py   snapshot + spanning tree (leader root, best-LQ router paths)
 thread_tree/ek.py         tshark EK -> engine calls (field table)
 thread_tree/capture.py    pcap / interface / command / EK sources
 thread_tree/store.py      SQLite persistence
 thread_tree/runtime.py    capture lifecycle + dataset (UI/CLI), private dataset file
-thread_tree/server.py     stdlib HTTP: /api/topology, /api/status, static UI
-thread_tree/web/          vanilla JS UI (tree, mesh, table views, legend, en/de)
+thread_tree/server.py     stdlib HTTP: topology, diagnostics, export, config, static UI
+thread_tree/web/          vanilla JS UI (tree, mesh, table, diagnosis views, charts, legend, en/de)
 ```
 
 Matter support is planned as a later extension; the graph model is transport-agnostic.
