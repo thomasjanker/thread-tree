@@ -98,6 +98,7 @@ class Engine:
         self.diag_info: dict = {}  # status of the active collector, for the UI (not persisted)
         self.capture = NodeStats()  # all frames heard, including those without transmitter address (ACKs)
         self.last_frame_any: float | None = None  # last frame the sniffer received (not persisted)
+        self.demo_outage: tuple[str, float] | None = None  # demo only: (router id, since) switched off by an outage test
         self.sniffer_outages: list[tuple[float, float]] = []  # periods without any frame: the sniffer was deaf
         self.pending_events: list[tuple[str, dict]] = []  # not yet saved
         self.dirty = False

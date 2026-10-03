@@ -118,6 +118,14 @@ findings. A coloured dot on a card in the tree marks nodes with a warning or cri
   sniffer can still look like it skips polls. Not yet checked on real traffic (the MLE Timeout field `mle.tlv.timeout`
   is taken from Wireshark's field reference).
 
+**Test: router outage.** On a router's device page, "Test outage" starts a guided test: you cut the router's power, and the
+Diagnosis tab follows live when the router fell silent, whether the mesh dropped its links, whether the leader changed,
+and for every device that was attached to it: when it searched for a parent, when and where it attached, or that it has
+not shown up yet. Stop the test when the devices have moved (it ends by itself after 30 minutes); the last 20 reports are
+kept (`<db>.settings.json`). The program cannot switch anything off itself. Works with the sniffer, and with the active
+diagnostics' rounds; in the demo the simulator switches the router off. API: `POST /api/tests/router-outage`
+`{"router": "<node id>"}`, `POST /api/tests/stop`, `GET /api/tests`.
+
 All of it, except the values marked as active diagnostics, is measured **at the sniffer**: RSSI/LQI are what the sniffer
 received, retransmissions are repeated frames it heard (same sequence number to the same destination within 0.5 s),
 "frames/h" counts what reached it. A device far from the sniffer looks weak and quiet without being so; findings are

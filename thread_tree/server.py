@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .engine import Engine
-from .runtime import ConfigLocked, Controller, DiagUnavailable
+from .runtime import ConfigLocked, Controller, DiagUnavailable, TestBusy
 from .diagnose import node_diagnostics, nodes_csv, report
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -59,6 +59,13 @@ def _flag(body: dict, key: str) -> bool:
     value = body.get(key)
     if not isinstance(value, bool):
         raise ValueError(f"field '{key}' (true / false) missing")
+    return value
+
+
+def _text(body: dict, key: str) -> str:
+    value = body.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"field '{key}' (text) missing")
     return value
 
 
@@ -119,6 +126,8 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._json(404, {"error": "unknown node"}) if result is None else self._json(200, result)
             if path == "/api/status":
                 return self._json(200, controller.status())
+            if path == "/api/tests":
+                return self._json(200, controller.tests())
             if path == "/api/config":
                 cfg = controller.config()
                 cfg["can_name"] = may_write(self.client_address[0], self.headers.get("Host"),
@@ -206,6 +215,10 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._action(controller.rebuild_topology)
             if path == "/api/diagnostics/run":
                 return self._action(controller.run_diagnostics)
+            if path == "/api/tests/router-outage":
+                return self._action(lambda body: controller.start_router_test(_text(body, "router")), with_body=True)
+            if path == "/api/tests/stop":
+                return self._action(controller.stop_test)
             if path == "/api/diagnostics/enabled":
                 return self._action(lambda body: controller.set_diag_enabled(_flag(body, "enabled")), with_body=True)
             self._config_write("set")
@@ -221,7 +234,7 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 if body is None:
                     return
                 result = action(body) if with_body else action()
-            except DiagUnavailable as exc:
+            except (DiagUnavailable, TestBusy) as exc:
                 return self._json(409, {"error": str(exc)})
             except (ValueError, json.JSONDecodeError) as exc:
                 return self._json(400, {"error": str(exc)})

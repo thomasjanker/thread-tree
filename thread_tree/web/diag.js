@@ -88,10 +88,11 @@ function closeDiagNode() {
 }
 
 async function loadDiagnostics() {
-  const requests = [fetch('/api/diagnostics').then(r => r.json())];
+  const requests = [fetch('/api/diagnostics').then(r => r.json()), fetch('/api/tests').then(r => r.json())];
   if (state.diagNode) requests.push(fetch(`/api/nodes/${encodeURIComponent(state.diagNode)}/diagnostics`));
-  const [report, detailRes] = await Promise.all(requests);
+  const [report, tests, detailRes] = await Promise.all(requests);
   state.diag = report;
+  state.tests = tests;
   if (detailRes) {
     if (detailRes.ok) state.diagDetail = await detailRes.json();
     else { state.diagNode = null; state.diagDetail = null; }  // the node is gone (e.g. after a rebuild)
@@ -116,6 +117,68 @@ async function setDiagEnabled(enabled) {
     notify(t(enabled ? 'diag.active.switched_on' : 'diag.active.switched_off'));
     poll();
   } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
+}
+
+// ---- guided test: router outage ----------------------------------------------------------------------------
+
+async function testRequest(path, body) {
+  const res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || res.status);
+  return data;
+}
+
+async function startRouterTest(d) {
+  const name = d.name || d.rloc16;
+  if (!confirm(fillTemplate(t('diag.test.confirm'), { name, n: d.children.length }, (k, v) => v))) return;
+  try {
+    await testRequest('/api/tests/router-outage', { router: d.id });
+    notify(fillTemplate(t('diag.test.started'), { name }, (k, v) => v));
+    closeDiagNode();
+  } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
+}
+
+async function stopTest() {
+  try { await testRequest('/api/tests/stop'); poll(); } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
+}
+
+function testReport(r) {
+  const name = r.router_name || r.router_rloc16;
+  const rel = s => (s === null || s === undefined ? '–' : fmtDuration(s));
+  const silent = r.router_silent_after !== null ? fillTemplate(t('diag.test.silent_after'), { s: fmtDuration(r.router_silent_after) }, (k, v) => v)
+    : r.router_last_heard ? fillTemplate(t('diag.test.still_heard'), { ago: ago(r.router_last_heard) }, (k, v) => v) : '–';
+  const leader = r.leader_before === r.leader_now ? t('diag.test.leader_same')
+    : fillTemplate(t('diag.test.leader_changed'), { a: routerLabel(r.leader_before), b: routerLabel(r.leader_now) }, (k, v) => v);
+  const rows = r.children.map(c => h('tr', {},
+    h('td', {}, state.topo.nodes[c.id] ? nodeLinkTo(c.id, nodeName(state.topo.nodes[c.id])) : (c.name || c.id)),
+    h('td', { class: 'mono' }, c.rloc16_before),
+    h('td', {}, h('span', { class: `tag test-${c.status}` }, t('diag.test.status.' + c.status))),
+    h('td', { class: 'num' }, rel(c.searched_after)), h('td', { class: 'num' }, rel(c.attached_after)),
+    h('td', {}, c.new_parent === null ? '–' : routerLabel(c.new_parent))));
+  return h('div', { class: `card test${r.running ? ' running' : ''}` },
+    h('div', { class: 'finding-head' }, h('strong', {}, fillTemplate(t(r.running ? 'diag.test.title_running' : 'diag.test.title_done'), { name }, (k, v) => v)),
+      r.running ? h('button', { type: 'button', onclick: stopTest, disabled: state.config?.can_name === false ? 'disabled' : null }, t('diag.test.stop'))
+        : h('span', { class: 'muted small' }, absTime(r.start))),
+    r.running ? h('p', {}, t('diag.test.instructions')) : null,
+    h('dl', { class: 'facts' },
+      h('dt', {}, t('diag.test.duration')), h('dd', {}, fmtDuration(r.duration)),
+      h('dt', {}, t('diag.test.router_silent')), h('dd', {}, silent),
+      h('dt', {}, t('diag.test.links')), h('dd', {}, String(r.links_left)),
+      h('dt', {}, t('diag.test.leader')), h('dd', {}, leader)),
+    r.children.length ? [h('p', {}, fillTemplate(t('diag.test.summary'), { moved: r.summary.moved, n: r.summary.children, longest: rel(r.summary.longest) }, (k, v) => v)),
+      h('div', { class: 'tablewrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, ...['diag.test.col.device', 'diag.test.col.before', 'diag.test.col.status', 'diag.test.col.searched', 'diag.test.col.attached', 'diag.test.col.parent'].map(k => h('th', {}, t(k))))),
+        h('tbody', {}, rows)))] : h('p', { class: 'muted' }, t('diag.test.no_children')),
+    h('p', { class: 'muted small' }, t('diag.test.note')));
+}
+
+function testsSection() {
+  const tests = state.tests;
+  if (!tests || (!tests.running && !tests.past.length)) return null;
+  return section('diag.test.section',
+    tests.running ? testReport(tests.running) : null,
+    tests.past.length ? h('details', { class: 'minor', open: tests.running ? null : 'open' },
+      h('summary', {}, fillTemplate(t('diag.test.past'), { n: tests.past.length }, (k, v) => v)), tests.past.slice(0, 5).map(testReport)) : null);
 }
 
 // ---- small building blocks ------------------------------------------------------------------------------
@@ -271,6 +334,7 @@ function renderDiagOverview() {
     h('div', { class: 'diag-head' }, h('h2', {}, t('view.diag')), sevChip(state.diag.summary.status),
       h('a', { class: 'btnlink', href: '/api/export/nodes.csv', download: 'thread-tree-nodes.csv' }, t('diag.export.csv'))),
     overviewCards(state.diag.summary),
+    testsSection(),
     section('diag.findings.title', findingList(findings),
       h('p', { class: 'muted small' }, t(state.diag.summary.active && state.diag.summary.active.enabled ? 'diag.note.active' : 'diag.note.passive'))),
     section('diag.nodes.title', diagTable()));
@@ -445,6 +509,8 @@ function renderNodeDiag() {
     h('div', { class: 'diag-head' }, back, h('h2', {}, title), roleChip(d.role), d.border_router ? abbr('BR') : null,
       d.diag_self ? h('span', { class: 'tag', title: t('diag.self.tip') }, t('diag.self')) : null, sevChip(d.status),
       n ? h('button', { type: 'button', onclick: () => { state.view = 'tree'; state.selected = d.id; render(); } }, t('diag.show_in_tree')) : null,
+      (d.role === 'router' || d.role === 'leader') && !(state.tests && state.tests.running)
+        ? h('button', { type: 'button', disabled: state.config?.can_name === false ? 'disabled' : null, onclick: () => startRouterTest(d) }, t('diag.test.start')) : null,
       h('a', { class: 'btnlink', href: `/api/nodes/${encodeURIComponent(d.id)}/diagnostics`, download: `thread-tree-${d.id}.json` }, t('diag.export.json'))),
     facts,
     d.findings.length ? section('diag.findings.title', d.findings.map(f => findingRow(f, null))) : null,

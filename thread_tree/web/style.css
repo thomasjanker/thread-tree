@@ -181,3 +181,6 @@ td.loss-high { color: var(--crit); font-weight: 600; }
 .mesh-badge text { font-size: 12px; font-weight: 700; }
 span.mesh-badge { display: inline-block; min-width: 22px; text-align: center; border: 2px solid var(--muted); border-radius: 50%; font-weight: 700; font-size: 12px; }
 span.mesh-badge.lq-3 { border-color: var(--ok); } span.mesh-badge.lq-1 { border-color: var(--crit); } span.mesh-badge.lossy { border-style: dashed; }
+.card.test { margin: 10px 0; } .card.test.running { border-color: var(--warn); border-width: 2px; }
+.tag.test-moved { color: var(--ok); border-color: var(--ok); } .tag.test-searching { color: var(--warn); border-color: var(--warn); }
+.tag.test-waiting { color: var(--muted); }

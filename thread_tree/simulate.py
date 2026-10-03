@@ -47,14 +47,26 @@ def _observe(engine: Engine, now: float, ext: str, rloc16: int):
     return engine.on_frame(now, ext, rloc16)
 
 
+def off_router_id(engine: Engine) -> int | None:
+    """The router the demo's outage test switched off (engine.demo_outage = (ext, start)), if any."""
+    outage = getattr(engine, "demo_outage", None)
+    return next((rid for rid, (ext, _, _) in ROUTERS.items() if outage and ext == outage[0]), None)
+
+
 def advertise(engine: Engine, now: float) -> None:
     """What every router's MLE advertisement carries: leader data and its links (Route64)."""
     with engine.lock:
+        off = off_router_id(engine)
         by_router: dict[int, list] = {}
         for a, b, lq_in, lq_out in LINKS:
+            if off in (a, b):
+                continue
             by_router.setdefault(a, []).append((b, lq_in, lq_out, 1))
             by_router.setdefault(b, []).append((a, lq_out, lq_in, 1))
-        for rid, entries in by_router.items():
+        for rid in ROUTERS:
+            if rid == off:
+                continue
+            entries = by_router.get(rid, [])  # a router whose only neighbour is off still advertises: no links
             node = engine.nodes.get(engine.rloc_index.get(rid << 10, ""))
             engine.on_leader_data(now, node, 0x1A2B3C4D, 0)
             engine.on_route64(now, rid << 10, entries)
@@ -197,9 +209,14 @@ def seed_active(engine: Engine, now: float, seed: int = 3) -> None:
         engine.on_mode(now, stick, True, True)      # a full Thread device that stays an end device
         engine.record_frame(now, stick, "data", 80, -45, 200, rng.randrange(256), "1400")
         routers: list[Router] = []
+        off = off_router_id(engine)
         for rid, (ext, _, is_br) in ROUTERS.items():
+            if rid == off:
+                continue  # switched off by the outage test: it does not answer
             links: dict[int, list[int]] = {}
             for a, b, lq_in, lq_out in LINKS:
+                if off in (a, b):
+                    continue
                 if rid == a:
                     links.setdefault(lq_in, []).append(b)
                 elif rid == b:
@@ -222,7 +239,7 @@ def seed_active(engine: Engine, now: float, seed: int = 3) -> None:
             neighbors = []
             for a, b, lq_in, lq_out in LINKS:
                 other, lq = (b, lq_in) if r.router_id == a else (a, lq_out) if r.router_id == b else (None, 0)
-                if other is not None:
+                if other is not None and other != off:
                     neighbors.append(RouterNeighbor(rloc16=other << 10, ext=by_rid[other], version=VERSIONS[other],
                                                     conn_time=rng.randint(40_000, 400_000), **_link_values(rng, *LINK_BY_LQ[lq])))
             engine.on_diag_neighbors(now, r.rloc16, neighbors)
@@ -297,9 +314,12 @@ class Simulator(threading.Thread):
     def step(self, now: float) -> None:
         share = self.interval / BUCKET
         with self.engine.lock:
+            off = off_router_id(self.engine)
+            if off is not None:
+                self._outage(now, off)
             for ext in PROFILES:
                 node = self.engine.nodes.get(ext)
-                if node is not None:
+                if node is not None and not (off is not None and ext == ROUTERS[off][0]):  # a switched-off router is silent
                     self.engine.on_frame(now, ext, node.rloc16)  # heard directly: stays online
                     _frames_slice(self.engine, self.rng, node, ext, now, self.seqs[ext], share)
             for node in list(self.engine.nodes.values()):
@@ -313,12 +333,30 @@ class Simulator(threading.Thread):
                     refresh_active(self.engine, now)
                     self._active_at = now
             flapper = self.engine.nodes.get(FLAPPER)
-            if flapper is not None and self.rng.random() < 0.02:  # now and then it moves to the other router
+            if flapper is not None and off is None and self.rng.random() < 0.02:  # now and then it moves to the other router
                 new_parent = 9 if flapper.rloc16 and (flapper.rloc16 >> 10) == 17 else 17
                 self.engine.on_parent_request(now, flapper)  # it searches, then attaches to the other router
                 self.engine.on_attach_request(now, flapper, self.engine.nodes.get(ROUTERS[new_parent][0]))
                 self.engine.on_frame(now, FLAPPER, _flapper_rloc(new_parent))
             self.engine.dirty = True
+
+    def _outage(self, now: float, off: int) -> None:
+        """The outage test of the demo: the children of the switched-off router notice it after a while, search
+        for a parent and attach to a neighbour of it (one after the other, the sleepy ones later)."""
+        start = self.engine.demo_outage[1]
+        neighbours = [b if a == off else a for a, b, *_ in LINKS if off in (a, b)]
+        new_rid = next((r for r in neighbours if r != off), 0)
+        new_router = self.engine.nodes.get(ROUTERS[new_rid][0])
+        orphans = [n for n in self.engine.nodes.values()
+                   if n.rloc16 is not None and not A.is_router_rloc(n.rloc16) and n.rloc16 >> 10 == off]
+        for i, node in enumerate(sorted(orphans, key=lambda n: n.id)):
+            notice = 20.0 + 15.0 * i + (40.0 if not node.rx_on_idle else 0.0)
+            if now - start < notice:
+                continue
+            self.engine.on_parent_request(now - 6, node)
+            self.engine.on_parent_request(now - 3, node)
+            self.engine.on_attach_request(now, node, new_router)
+            self.engine.on_frame(now, node.ext, (new_rid << 10) | (40 + i))
 
     def run(self) -> None:
         while not self._stop_evt.wait(self.interval):

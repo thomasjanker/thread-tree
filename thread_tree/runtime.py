@@ -31,6 +31,13 @@ class DiagUnavailable(Exception):
     """Active diagnostics are not set up (no --diag-port)."""
 
 
+class TestBusy(Exception):
+    """A guided test is already running (or none is running to stop)."""
+
+
+TESTS_KEPT = 20
+
+
 class Controller:
     def __init__(self, engine: Engine, mode: str, source: str = "", channel: int | None = None,
                  dataset_path: Path | None = None, cli_dataset: str | None = None,
@@ -45,6 +52,8 @@ class Controller:
         self._dataset_hex: str | None = None  # the raw dataset for the diagnostic node: contains the key, never leaves here
         self.settings_path = settings_path  # settings changed in the UI (not secret)
         self.diag_paused = bool(self._settings().get("diag_paused", False))
+        self.test = None  # the guided test that is running (scenario.py)
+        self.past_tests: list[dict] = list(self._settings().get("tests", []))
         if mode == "demo" and self.diag_paused:  # the demo's simulated rounds stay switched off too
             with engine.lock:
                 engine.diag_info = {**engine.diag_info, "state": "paused", "paused": True}
@@ -188,6 +197,44 @@ class Controller:
         tmp = self.settings_path.with_name(self.settings_path.name + ".tmp")
         tmp.write_text(json.dumps(data))
         os.replace(tmp, self.settings_path)
+
+    # ---- guided tests -------------------------------------------------------
+
+    def start_router_test(self, node_id: str) -> dict:
+        from .scenario import RouterOutageTest
+        with self.lock:
+            self._close_finished_test()
+            if self.test is not None:
+                raise TestBusy("a test is already running")
+            self.test = RouterOutageTest(self.engine, node_id, time.time())  # ValueError: not a router
+            if self.mode == "demo":  # the simulator switches the router off: the test has something to show
+                self.engine.demo_outage = (node_id, time.time())
+            return self.tests()
+
+    def stop_test(self) -> dict:
+        with self.lock:
+            if self.test is None:
+                raise TestBusy("no test is running")
+            self.test.finish(time.time())
+            self._close_finished_test()
+            return self.tests()
+
+    def _close_finished_test(self) -> None:
+        """A finished test (stopped, or over its maximum duration) goes to the kept reports."""
+        if self.test is None:
+            return
+        report = self.test.report(self.engine, time.time())
+        if not report["running"]:
+            self.engine.demo_outage = None  # the demo's router is switched on again
+            self.past_tests = [report, *self.past_tests][:TESTS_KEPT]
+            self._save_settings(tests=self.past_tests)
+            self.test = None
+
+    def tests(self) -> dict:
+        with self.lock:
+            self._close_finished_test()
+            return {"running": self.test.report(self.engine, time.time()) if self.test else None,
+                    "past": self.past_tests}
 
     # ---- active diagnostics -------------------------------------------------
 
