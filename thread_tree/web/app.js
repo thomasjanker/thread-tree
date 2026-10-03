@@ -434,6 +434,13 @@ function render() {
   rb.textContent = t('rebuild');
   rb.title = t('rebuild.tip');
   rb.disabled = state.config?.can_name === false;  // same access rule as naming; the server enforces it
+  const db = document.getElementById('diag-btn');  // always reachable, also with an empty tree
+  const paused = !!state.status?.diagnostics_paused;
+  db.hidden = !state.status?.diagnostics;
+  db.textContent = t(paused ? 'header.diag.off' : 'header.diag.on');
+  db.title = t('header.diag.tip');
+  db.className = paused ? 'diag-off' : '';
+  db.disabled = state.config?.can_name === false;
   const views = document.getElementById('views');
   views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === state.view), onclick: () => { state.view = v; render(); if (v === 'diag') poll(); } }, t('view.' + v))));
 
@@ -497,6 +504,7 @@ async function init() {
   document.getElementById('partition').addEventListener('change', e => { state.partition = Number(e.target.value); render(); });
   document.getElementById('settings-btn').addEventListener('click', openSettings);
   document.getElementById('rebuild-btn').addEventListener('click', rebuildTree);
+  document.getElementById('diag-btn').addEventListener('click', () => setDiagEnabled(!!state.status?.diagnostics_paused));
   document.getElementById('legend-btn').addEventListener('click', () => { renderLegend(); document.getElementById('legend').showModal(); });
   render();
   loadConfig().then(render);

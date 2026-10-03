@@ -299,6 +299,9 @@ class Controller:
         if self.mode == "demo":  # nothing would refill the simulated network
             from .simulate import populate
             populate(self.engine, active=True)
+            if self.diag_paused:  # the fresh demo round must not switch it on again
+                with self.engine.lock:
+                    self.engine.diag_info = {**self.engine.diag_info, "state": "paused", "paused": True}
         elif self.diag is not None:  # what was cleared comes back with the next round
             self.diag.trigger()
         return result

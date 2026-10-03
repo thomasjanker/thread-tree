@@ -184,3 +184,4 @@ span.mesh-badge.lq-3 { border-color: var(--ok); } span.mesh-badge.lq-1 { border-
 .card.test { margin: 10px 0; } .card.test.running { border-color: var(--warn); border-width: 2px; }
 .tag.test-moved { color: var(--ok); border-color: var(--ok); } .tag.test-searching { color: var(--warn); border-color: var(--warn); }
 .tag.test-waiting { color: var(--muted); }
+#diag-btn.diag-off { border-color: var(--warn); color: var(--warn); }
