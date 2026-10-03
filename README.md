@@ -139,6 +139,19 @@ hints, not proof.
 The thresholds are constants at the top of `thread_tree/diagnose.py`. API: `/api/diagnostics` (summary and findings),
 `/api/nodes/<id>/diagnostics` (device page as JSON), `/api/export/nodes.csv`; `/api/topology` carries a `health` per node.
 
+## Which stick needs which firmware
+
+Both jobs use an nRF52840 stick, but with **different firmware**. One stick does one job at a time; to use both
+(sniffer and active diagnostics) you need two sticks.
+
+| Job | Firmware | Where | Tells the program |
+|---|---|---|---|
+| **Sniffer** (passive: frames, signal, statistics) | Nordic's *nRF Sniffer for 802.15.4*, appears as USB `1915:154b` | [firmware/nordic-sniffer/](firmware/nordic-sniffer/) (Nordic's license, not GPL) | `--source nrf:/dev/ttyACM…` (+ Nordic's extcap script, see below) |
+| **Diagnostic node** (active: asks the routers) | OpenThread CLI with `meshdiag`, built by this project's [GitHub workflow](.github/workflows/firmware-diag.yml), appears as `OpenThread Device` | [release `firmware-diag-2026-10-03`](https://github.com/thomasjanker/thread-tree/releases/tag/firmware-diag-2026-10-03), steps in [docs/diagnostics.md](docs/diagnostics.md) | `--diag-port /dev/serial/by-id/…` |
+
+Only one of them is needed to start: without a sniffer use `--source "cmd:sleep 1000000"` together with `--diag-port`
+(no radio statistics then); without a diagnostic node use just the sniffer.
+
 ## Raspberry Pi + Nordic nRF 802.15.4 sniffer (setup that worked in testing)
 
 0. Flash the sniffer firmware onto the stick: [firmware/nordic-sniffer/](firmware/nordic-sniffer/) has Nordic's hex for the
