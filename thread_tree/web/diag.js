@@ -162,7 +162,7 @@ function findingRow(f, nodeId) {
     h('div', { class: 'finding-head' }, sevChip(f.severity), h('strong', {}, text.title),
       nodeId ? nodeLinkTo(nodeId, nodeName(state.topo.nodes[nodeId])) : null),
     h('p', {}, text.text),
-    h('details', {}, h('summary', {}, t('diag.hint')), h('p', {}, text.hint)));
+    foldable(`hint:${nodeId || state.diagNode}:${f.code}`, false, {}, t('diag.hint'), h('p', {}, text.hint)));
 }
 
 // ---- overview ------------------------------------------------------------------------------------------
@@ -221,8 +221,8 @@ function findingList(findings) {
   const major = findings.filter(x => x.f.severity === 'warn' || x.f.severity === 'crit');
   const minor = findings.filter(x => !(x.f.severity === 'warn' || x.f.severity === 'crit'));
   return [major.map(({ f, nodeId }) => findingRow(f, nodeId)),
-    minor.length ? h('details', { class: 'minor', open: major.length === 0 ? 'open' : null },
-      h('summary', {}, fillTemplate(t('diag.findings.minor'), { n: minor.length }, (k, v) => v)),
+    minor.length ? foldable('minor', major.length === 0, { class: 'minor' },
+      fillTemplate(t('diag.findings.minor'), { n: minor.length }, (k, v) => v),
       minor.map(({ f, nodeId }) => findingRow(f, nodeId))) : null];
 }
 

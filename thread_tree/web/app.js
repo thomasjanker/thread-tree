@@ -4,7 +4,8 @@ const ROLES = ['leader', 'router', 'fed', 'med', 'sed', 'child', 'unknown'];
 const TYPES = ['rloc', 'aloc', 'ml-eid', 'omr', 'link-local'];
 const VIEWS = ['tree', 'mesh', 'table', 'diag', 'tests', 'log'];
 const state = { notice: null, lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '',
-  diag: null, diagNode: null, diagDetail: null, diagFilter: '', diagSort: { key: 'status', dir: -1 } };
+  diag: null, diagNode: null, diagDetail: null, diagFilter: '', diagSort: { key: 'status', dir: -1 },
+  folds: {} };  // open / closed state of foldable sections, kept while the page is drawn again
 
 // ---- helpers ---------------------------------------------------------------
 function h(tag, attrs, ...kids) {
@@ -24,6 +25,13 @@ function s(tag, attrs, ...kids) {
     if (k.startsWith('on')) el.addEventListener(k.slice(2), v); else el.setAttribute(k, v);
   }
   el.append(...kids.flat(Infinity).filter(k => k != null));
+  return el;
+}
+// a <details> section that stays open or closed when the page is drawn again (every few seconds)
+function foldable(key, defaultOpen, attrs, summary, ...content) {
+  const el = h('details', { ...(attrs || {}), open: (key in state.folds ? state.folds[key] : defaultOpen) ? 'open' : null },
+    h('summary', {}, summary), ...content);
+  el.addEventListener('toggle', () => { state.folds[key] = el.open; });
   return el;
 }
 // replaceChildren() stringifies arrays and null: flatten and drop empty entries first

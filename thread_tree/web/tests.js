@@ -156,6 +156,5 @@ function renderTests() {
     h('p', { class: 'muted' }, t('tests.how')),
     h('div', { class: 'test-grid' }, TEST_KINDS.map(([kind, what]) => testCard(kind, what, running))),
     tests && tests.past.length ? section('diag.test.section',
-      h('details', { class: 'minor', open: 'open' },
-        h('summary', {}, tfill('diag.test.past', { n: tests.past.length })), tests.past.slice(0, 5).map(testReport))) : null);
+      foldable('tests:past', true, { class: 'minor' }, tfill('diag.test.past', { n: tests.past.length }), tests.past.slice(0, 5).map(testReport))) : null);
 }
