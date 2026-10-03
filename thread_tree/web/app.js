@@ -141,30 +141,56 @@ function renderTree(p) {
 }
 
 // ---- mesh view -------------------------------------------------------------
+const MESH_LOSS_HIGH = 25;  // percent of frames lost: same threshold as the server's "lossy link" finding
+function meshTip(ls) {
+  const name = id => (state.topo.nodes[id] ? nodeName(state.topo.nodes[id]) : '?');
+  return ls.map(l => {
+    const m = l.metrics;
+    return `${name(l.from)} → ${name(l.to)}: ${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out}`
+      + (m ? ` · ${fmtDbm(m.rss_ave)} · ${fmtPercentValue(m.frame_err)} ${t('d.lost')}` : '') + (l.stale ? ` — ${t('link.stale')}` : '');
+  }).join('\n');
+}
 function renderMesh(p) {
-  const routers = Object.values(state.topo.nodes).filter(n => n.partition_id === p.id && ['leader', 'router'].includes(n.role));
-  const R = Math.max(140, routers.length * 26), size = R * 2 + 2 * (CARD_W / 2 + PAD);
-  const cx = size / 2, cy = R + CARD_H + PAD;
-  const svg = s('svg', { width: size, height: R * 2 + CARD_H * 3, role: 'img', 'aria-label': t('view.mesh') });
+  const routers = Object.values(state.topo.nodes).filter(n => n.partition_id === p.id && ['leader', 'router'].includes(n.role))
+    .sort((a, b) => (a.role === 'leader' ? -1 : b.role === 'leader' ? 1 : (a.rloc16 || '').localeCompare(b.rloc16 || '')));
+  const count = Math.max(1, routers.length);
+  // radius so that neighbouring cards never overlap: the chord between two neighbours must exceed a card plus a gap
+  const R = count < 3 ? 140 : Math.max(140, Math.ceil((CARD_W + 50) / (2 * Math.sin(Math.PI / count))));
+  const W = 2 * R + CARD_W + 2 * PAD, H = 2 * R + CARD_H + 2 * PAD, cx = W / 2, cy = H / 2;
+  const svg = s('svg', { width: W, height: H, role: 'img', 'aria-label': t('view.mesh') });
   const at = new Map(routers.map((n, i) => {
-    const a = (2 * Math.PI * i) / Math.max(1, routers.length) - Math.PI / 2;
+    const a = (2 * Math.PI * i) / count - Math.PI / 2;
     return [n.id, { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) }];
   }));
-  const seen = new Set();
+  const pairs = new Map();  // one line per pair of routers, both directions together
   for (const l of state.topo.links) {
-    const a = at.get(l.from), b = at.get(l.to);
+    if (!at.has(l.from) || !at.has(l.to)) continue;
     const key = [l.from, l.to].sort().join('|');
-    if (!a || !b || seen.has(key)) continue;
-    seen.add(key);
-    const lq = Math.max(l.lq_in, l.lq_out);
-    const line = s('line', { class: `edge ${l.stale ? 'unknown' : 'link'}`, x1: a.x, y1: a.y, x2: b.x, y2: b.y, 'stroke-width': 1 + lq, opacity: lq && !l.stale ? 1 : .3 });
-    line.append(s('title', {}, `${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${fmtCost(l.cost)}${l.stale ? ' — ' + t('link.stale') : ''}`));
-    svg.append(line);
+    if (!pairs.has(key)) pairs.set(key, []);
+    pairs.get(key).push(l);
   }
+  const lines = s('g', {}), badges = s('g', {});
+  for (const ls of pairs.values()) {
+    const a = at.get(ls[0].from), b = at.get(ls[0].to);
+    const lq = Math.min(...ls.flatMap(l => [l.lq_in, l.lq_out]));
+    const lost = Math.max(0, ...ls.map(l => (l.metrics && l.metrics.frame_err) || 0));
+    const cls = `mesh-link lq-${lq}${ls.every(l => l.stale) ? ' stale' : ''}${lost >= MESH_LOSS_HIGH ? ' lossy' : ''}`;
+    const tip = meshTip(ls);
+    const line = s('line', { class: cls, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    line.append(s('title', {}, tip));
+    lines.append(line);
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;  // quality in the middle of the line, red ring if frames are lost
+    const badge = s('g', { class: `mesh-badge lq-${lq}${lost >= MESH_LOSS_HIGH ? ' lossy' : ''}`, transform: `translate(${mx},${my})` },
+      s('circle', { r: 11 }), s('text', { y: 4, 'text-anchor': 'middle' }, String(lq)));
+    badge.append(s('title', {}, tip));
+    badges.append(badge);
+  }
+  svg.append(lines);
   for (const n of routers) {
     const a = at.get(n.id);
     svg.append(nodeCard(n, a.x - CARD_W / 2, a.y - CARD_H / 2, () => select(n.id)));
   }
+  svg.append(badges);  // above the cards: a line may pass under one
   return svg;
 }
 
@@ -289,7 +315,9 @@ function renderLegend() {
     h('h3', {}, t('legend.edges')),
     grid([h('span', { class: 'chip', style: 'background:var(--router)' }, '━'), t('legend.edge.link')],
       [h('span', { class: 'chip', style: 'background:var(--line);color:var(--text)' }, '─'), t('legend.edge.child')],
-      [h('span', { class: 'chip', style: 'background:var(--muted)' }, '┄'), t('legend.edge.unknown')]),
+      [h('span', { class: 'chip', style: 'background:var(--muted)' }, '┄'), t('legend.edge.unknown')],
+      [h('span', { class: 'mesh-badge lq-3' }, '3'), t('legend.mesh.lq')],
+      [h('span', { class: 'mesh-badge lq-1 lossy' }, '1'), t('legend.mesh.loss')]),
     h('h3', {}, t('legend.types')),
     grid(TYPES.map(ty => [h('span', { class: 'tag' }, typeLabel(ty)), abbrDesc(ty)])),
     h('h3', {}, t('legend.sources')),

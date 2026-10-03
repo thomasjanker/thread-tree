@@ -168,3 +168,16 @@ details.minor > summary { cursor: pointer; color: var(--muted); padding: 4px 0; 
 .card-actions button { font-size: 12px; padding: 2px 10px; }
 .card-actions p { margin: 6px 0 0; }
 td.loss-high { color: var(--crit); font-weight: 600; }
+
+/* ---- mesh view ---- */
+.mesh-link { stroke: var(--muted); stroke-width: 3; stroke-linecap: round; }
+.mesh-link.lq-3 { stroke: var(--ok); } .mesh-link.lq-2 { stroke: var(--warn); } .mesh-link.lq-1 { stroke: var(--crit); }
+.mesh-link.lq-0 { stroke-dasharray: 2 6; }
+.mesh-link.lossy { stroke-dasharray: 9 5; }
+.mesh-link.stale { opacity: .35; }
+.mesh-badge circle { fill: var(--surface); stroke: var(--muted); stroke-width: 2; }
+.mesh-badge.lq-3 circle { stroke: var(--ok); } .mesh-badge.lq-2 circle { stroke: var(--warn); } .mesh-badge.lq-1 circle { stroke: var(--crit); }
+.mesh-badge.lossy circle { stroke-dasharray: 4 3; }
+.mesh-badge text { font-size: 12px; font-weight: 700; }
+span.mesh-badge { display: inline-block; min-width: 22px; text-align: center; border: 2px solid var(--muted); border-radius: 50%; font-weight: 700; font-size: 12px; }
+span.mesh-badge.lq-3 { border-color: var(--ok); } span.mesh-badge.lq-1 { border-color: var(--crit); } span.mesh-badge.lossy { border-style: dashed; }
