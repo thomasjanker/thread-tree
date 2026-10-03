@@ -170,6 +170,46 @@ Both jobs use an nRF52840 stick, but with **different firmware**. One stick does
 Only one of them is needed to start: without a sniffer use `--source "cmd:sleep 1000000"` together with `--diag-port`
 (no radio statistics then); without a diagnostic node use just the sniffer.
 
+## Planned tests (open)
+
+Ideas derived from the Thread specification, not implemented yet. Needs: **S** sniffer, **D** diagnostic stick (its
+firmware has `ping`, `scan`, `counters`, `eidcache`), **U** the user triggers something. Suggested order: 15, 9, 8, 10.
+
+Guided tests (the user triggers, the program measures)
+1. Leader outage (S, U): time without a leader after the network ID timeout (default 120 s), new partition ID or not,
+   Network Data (version) redistributed.
+2. Border router outage (S, U): when the OMR prefix and routes leave the Network Data, whether another device takes over,
+   how long Thread devices are unreachable from the home network.
+3. Router comes back (S, U): same router ID again (IDs stay reserved for a while), time to its first advertisement,
+   whether its children return.
+4. Partition and merge (S, U): cut the only router between two parts; do two partitions form, how long the merge takes.
+5. Router upgrade (S, U): with fewer routers than the upgrade threshold (16), does a router-eligible end device become a
+   router after an outage, and when.
+6. Re-attach after a battery change (S, U): time from the first Parent Request to the Child ID Response, attempts, chosen
+   parent.
+7. Commissioning a new device (S, U): Discovery, Joiner, Entrust with timestamps, to see where pairing fails.
+
+Continuous checks against the standard (automatic, passive)
+
+8. Parent selection (S): routers answer a search with link margin and connectivity; did the device pick the best one?
+9. Reboot detection (S): frame counters only grow per sender; a counter that jumps back means a restart or reset.
+10. Child supervision (S): since Thread 1.2 the parent must contact a silent child within the supervision interval; do
+    parent and child keep to it?
+11. Network Data versions (S): a router whose advertised data version keeps lagging does not receive Network Data.
+12. Advertisement timing (S): Trickle runs between 1 s and 32 s; too slow (gaps) is not conform either.
+13. Full routers (S): a router that rejects attaches or does not answer searches because its child table is full.
+14. Battery estimate (S): rough radio-on time from poll rhythm and traffic; flag unusually high consumption.
+
+Active tests with the stick
+
+15. Reachability series (D): e.g. 20 pings to a sleepy device's ML-EID; success rate and round trip (about its poll
+    interval); optionally every few minutes.
+16. Census by multicast (D): ping to all Thread nodes (`ff03::1`): who answers, who is listed but silent.
+17. Address resolution after a parent change (D, S): how long a device is unreachable by its ML-EID until EID-to-RLOC
+    mappings are updated.
+18. Channel check (D): `scan energy` on all channels (Wi-Fi overlap) and the stick's MAC counters (CCA failures,
+    retries); whether the energy scan works while attached needs checking on hardware.
+
 ## Raspberry Pi + Nordic nRF 802.15.4 sniffer (setup that worked in testing)
 
 0. Flash the sniffer firmware onto the stick: [firmware/nordic-sniffer/](firmware/nordic-sniffer/) has Nordic's hex for the
