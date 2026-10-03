@@ -141,6 +141,9 @@ The thresholds are constants at the top of `thread_tree/diagnose.py`. API: `/api
 
 ## Raspberry Pi + Nordic nRF 802.15.4 sniffer (setup that worked in testing)
 
+0. Flash the sniffer firmware onto the stick: [firmware/nordic-sniffer/](firmware/nordic-sniffer/) has Nordic's hex for the
+   nRF52840 Dongle with checksum and flashing steps (Nordic's license, not GPL); other boards and newer versions:
+   [NordicSemiconductor/nRF-Sniffer-for-802.15.4](https://github.com/NordicSemiconductor/nRF-Sniffer-for-802.15.4).
 1. `sudo apt install tshark python3-serial git`; add your user to `dialout` and `wireshark`; log in again.
 2. Install Nordic's extcap script (run as your user, not root, the extcap folder is per user):
    `git clone https://github.com/NordicSemiconductor/nRF-Sniffer-for-802.15.4`, copy `nrf802154_sniffer.py` to
@@ -246,6 +249,7 @@ thread_tree/collector.py  active diagnostics: join as end device, rounds of ques
 thread_tree/diagprobe.py  diag-probe: what can the stick ask? (transcript without secrets)
 thread_tree/simulate.py   demo network incl. simulated active diagnostics
 thread_tree/server.py     stdlib HTTP: topology, diagnostics, export, config, static UI
+firmware/nordic-sniffer/  Nordic's sniffer firmware (own license, see its folder), unmodified
 thread_tree/web/          vanilla JS UI (tree, mesh, table, diagnosis views, charts, legend, en/de)
 ```
 
@@ -254,4 +258,5 @@ Matter support is planned as a later extension; the graph model is transport-agn
 ## License
 
 Copyright (C) 2026 Thomas Janker. Licensed under the GNU General Public License, version 3 or (at your
-option) any later version. See [LICENSE](LICENSE).
+option) any later version. See [LICENSE](LICENSE). Exception: `firmware/nordic-sniffer/` contains Nordic Semiconductor's
+firmware under Nordic's license (see the `LICENSE` file there).
