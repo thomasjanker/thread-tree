@@ -16,7 +16,12 @@ The commands needed (`meshdiag`, `networkdiagnostic`) are compiled in only on bo
 `ot-cli-ftd-USB.hex` of ArthFink/nrf52840-OpenThread (release 2026-09, `OPENTHREAD/c34311f`): the binary contains
 `routereligible`, `neighbor`, `netdata`, `dataset` but neither `meshdiag` nor `networkdiagnostic`.
 
-So the firmware is built **in the cloud**, no local toolchain: GitHub Actions workflow
+**Ready to flash:** the pre-release
+[`firmware-diag-2026-10-03`](https://github.com/thomasjanker/thread-tree/releases/tag/firmware-diag-2026-10-03)
+(hex file, checksum, build info and `NOTICES.txt` with the component licenses; read them: Nordic's license restricts use to
+Nordic chips). Not verified on hardware yet.
+
+To build a newer one **in the cloud**, no local toolchain: GitHub Actions workflow
 [`firmware-diag.yml`](../.github/workflows/firmware-diag.yml) (Actions tab -> "Firmware (nRF52840 diagnostic node)"
 -> Run workflow). It builds `ot-cli-ftd` with `-DOT_BOOTLOADER=USB -DOT_MESH_DIAG=ON -DOT_NETDIAG_CLIENT=ON`, fails
 if the command names are missing in the binary, and uploads `ot-cli-ftd-diag-USB.hex` with the source commits and a
@@ -24,6 +29,7 @@ checksum.
 
 ## Flash the stick
 
+0. Download `ot-cli-ftd-diag-USB.hex` from the release above (`sha256sum -c SHA256SUMS`).
 1. Open the case: the Ebyte E104-BT5040U has a reset button inside.
 2. Plug it in, press reset: the LED pulses red, USB id `1915:521f` (bootloader).
 3. nRF Connect for Desktop -> Programmer -> select the device -> add `ot-cli-ftd-diag-USB.hex` -> Write.

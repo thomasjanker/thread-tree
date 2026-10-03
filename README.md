@@ -96,7 +96,8 @@ router-to-router links need that router's advertisement to reach the sniffer.
 
 A second nRF52840 with OpenThread CLI firmware can join as end device and ask the network directly (routers, children
 with MAC and IPv6 addresses, vendor/model). Plan, firmware build (GitHub Actions, no local toolchain) and the
-Phase 0 test tool (`python3 -m thread_tree diag-probe`): [docs/diagnostics.md](docs/diagnostics.md).
+Phase 0 test tool (`python3 -m thread_tree diag-probe`): [docs/diagnostics.md](docs/diagnostics.md). A prebuilt firmware is
+in the [releases](https://github.com/thomasjanker/thread-tree/releases/tag/firmware-diag-2026-10-03) (pre-release).
 
 ## Limits of passive capture
 
