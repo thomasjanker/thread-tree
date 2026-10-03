@@ -13,6 +13,30 @@ Optionally a second nRF52840 joins as an end device and *asks* the network what 
 IKEA DIRIGERA); the active diagnostics are tested against recorded real output and a simulated stick, not yet live on
 hardware (see "Verification status").**
 
+## Screenshots
+
+Made with the demo network (`python3 -m thread_tree demo`: simulated devices with made-up names, including the active
+diagnostics). The UI is available in English and German, light and dark.
+
+**Tree:** leader, routers and end devices with roles; the side panel shows a device (names are yours, the MAC address
+and all IPv6 addresses are listed, the dotted circle marks a device the sniffer never heard directly).
+
+![Tree view with the detail panel of a router](docs/screenshots/tree.png)
+
+**Mesh:** router links by quality (colour and number); a dashed line with a dashed ring means the router loses 25 % or
+more of its frames on that link (active diagnostics).
+
+![Mesh view](docs/screenshots/mesh.png)
+
+**Diagnosis:** network overview with the state of the active diagnostics, and the findings with an explanation.
+
+![Diagnosis overview](docs/screenshots/diagnosis.png)
+
+**Device page:** findings, and per link the signal, margin and loss the routers measure themselves, children with their
+parent's measurements, history.
+
+![Device page of a router](docs/screenshots/device.png)
+
 ## Quick start
 
 ```sh
