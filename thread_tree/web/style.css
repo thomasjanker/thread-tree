@@ -185,3 +185,5 @@ span.mesh-badge.lq-3 { border-color: var(--ok); } span.mesh-badge.lq-1 { border-
 .tag.test-moved { color: var(--ok); border-color: var(--ok); } .tag.test-searching { color: var(--warn); border-color: var(--warn); }
 .tag.test-waiting { color: var(--muted); }
 #diag-btn.diag-off { border-color: var(--warn); color: var(--warn); }
+.card.test-card h3 { margin: 0 0 6px; font-size: 14px; } .card.test-card select { max-width: 100%; }
+button:disabled { opacity: .5; cursor: default; } button:disabled:hover { border-color: var(--line); }

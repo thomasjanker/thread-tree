@@ -2,7 +2,7 @@
 
 const ROLES = ['leader', 'router', 'fed', 'med', 'sed', 'child', 'unknown'];
 const TYPES = ['rloc', 'aloc', 'ml-eid', 'omr', 'link-local'];
-const VIEWS = ['tree', 'mesh', 'table', 'diag'];
+const VIEWS = ['tree', 'mesh', 'table', 'diag', 'tests'];
 const state = { notice: null, lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '',
   diag: null, diagNode: null, diagDetail: null, diagFilter: '', diagSort: { key: 'status', dir: -1 } };
 
@@ -442,7 +442,7 @@ function render() {
   db.className = paused ? 'diag-off' : '';
   db.disabled = state.config?.can_name === false;
   const views = document.getElementById('views');
-  views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === state.view), onclick: () => { state.view = v; render(); if (v === 'diag') poll(); } }, t('view.' + v))));
+  views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', 'aria-selected': String(v === state.view), onclick: () => { state.view = v; render(); if (v === 'diag' || v === 'tests') poll(); } }, t('view.' + v))));
 
   const st = state.status, pe = document.getElementById('status'), banner = document.getElementById('banner');
   let msg = null, settingsLink = false;
@@ -466,11 +466,11 @@ function render() {
   sel.replaceChildren(...topo.partitions.map(p => h('option', { value: p.id, selected: p.id === state.partition }, `${t('partition')} ${p.id.toString(16)} (${Object.values(topo.nodes).filter(n => n.partition_id === p.id && !n.placeholder).length})`)));
   sel.hidden = topo.partitions.length < 2;
   const p = partitionData();
-  if (!p || Object.values(topo.nodes).filter(n => !n.placeholder).length === 0) { view.replaceChildren(h('div', { class: 'empty' }, t('empty'))); renderDrawer(); return; }
+  if (state.view !== 'tests' && (!p || Object.values(topo.nodes).filter(n => !n.placeholder).length === 0)) { view.replaceChildren(h('div', { class: 'empty' }, t('empty'))); renderDrawer(); return; }
   const scroll = [view.scrollLeft, view.scrollTop];
-  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : state.view === 'table' ? renderTable(p) : renderDiagnose());
+  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : state.view === 'table' ? renderTable(p) : state.view === 'tests' ? renderTests() : renderDiagnose());
   [view.scrollLeft, view.scrollTop] = scroll;
-  if (state.view === 'diag') document.getElementById('drawer').hidden = true;
+  if (state.view === 'diag' || state.view === 'tests') document.getElementById('drawer').hidden = true;
   else renderDrawer();
 }
 
@@ -480,13 +480,14 @@ async function poll() {
     const [topo, status] = await Promise.all([fetch('/api/topology').then(r => r.json()), fetch('/api/status').then(r => r.json())]);
     state.topo = topo; state.status = status;
     if (state.view === 'diag') await loadDiagnostics();
+    if (state.view === 'tests') await loadTests();
   } catch (err) {
     statusEl.textContent = '⚠'; statusEl.title = String(err);  // server unreachable
     return;
   }
   try {
     // never rebuild the page while the user is typing in a field: it would drop the input
-    if (!document.activeElement || document.activeElement.tagName !== 'INPUT') render();
+    if (!document.activeElement || !['INPUT', 'SELECT'].includes(document.activeElement.tagName)) render();
     statusEl.title = '';
   } catch (err) {  // a bug in the UI: say so instead of silently showing stale content
     console.error(err);

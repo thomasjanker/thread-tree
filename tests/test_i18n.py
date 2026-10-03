@@ -53,7 +53,7 @@ class I18nTests(unittest.TestCase):
 
     def test_every_translation_key_used_in_the_javascript_exists(self):
         used = set()
-        for js in ("app.js", "diag.js", "charts.js"):
+        for js in ("app.js", "diag.js", "charts.js", "tests.js"):
             used |= set(re.findall(r"""\bt\(\s*['"]([\w.\-]+)['"]""", (WEB / js).read_text(encoding="utf-8")))
         # a key ending in '.' is a prefix completed at run time (t('role.' + role)): some key must start with it
         missing = sorted(k for k in used if (not any(e.startswith(k) for e in EN) if k.endswith(".") else k not in EN))

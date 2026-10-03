@@ -118,7 +118,7 @@ findings. A coloured dot on a card in the tree marks nodes with a warning or cri
   sniffer can still look like it skips polls. Not yet checked on real traffic (the MLE Timeout field `mle.tlv.timeout`
   is taken from Wireshark's field reference).
 
-**Test: router outage.** On a router's device page, "Test outage" starts a guided test: you cut the router's power, and the
+**Tests tab: router outage.** On the **Tests** tab, pick a router and start a guided test: you cut the router's power, and the
 Diagnosis tab follows live when the router fell silent, whether the mesh dropped its links, whether the leader changed,
 and for every device that was attached to it: when it searched for a parent, when and where it attached, or that it has
 not shown up yet. Stop the test when the devices have moved (it ends by itself after 30 minutes); the last 20 reports are
