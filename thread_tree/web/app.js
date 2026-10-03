@@ -178,17 +178,30 @@ function renderMesh(p) {
     if (!pairs.has(key)) pairs.set(key, []);
     pairs.get(key).push(l);
   }
+  // arrowheads, one per quality colour: a head where frames arrive
+  svg.append(s('defs', {}, [1, 2, 3].map(q => s('marker', { id: `arrow-${q}`, viewBox: '0 0 10 10', refX: 9, refY: 5, markerWidth: 11,
+    markerHeight: 11, markerUnits: 'userSpaceOnUse', orient: 'auto-start-reverse' }, s('path', { d: 'M0,0 L10,5 L0,10 z', class: `arrow lq-${q}` })))));
   const lines = s('g', {}), badges = s('g', {});
   for (const ls of pairs.values()) {
-    const a = at.get(ls[0].from), b = at.get(ls[0].to);
-    const lq = Math.min(...ls.flatMap(l => [l.lq_in, l.lq_out]));
+    const A = ls[0].from, B = ls[0].to, a = at.get(A), b = at.get(B);
+    // A -> B works if B hears A: A's "out" or B's "in"; the other direction the other way round
+    const dir = (from, to) => Math.max(0, ...ls.map(l => (l.from === from ? l.lq_out : l.from === to ? l.lq_in : 0)));
+    const ab = dir(A, B), ba = dir(B, A);
+    if (!ab && !ba) continue;
+    const lq = ab && ba ? Math.min(ab, ba) : Math.max(ab, ba);
     const lost = Math.max(0, ...ls.map(l => (l.metrics && l.metrics.frame_err) || 0));
     const cls = `mesh-link lq-${lq}${ls.every(l => l.stale) ? ' stale' : ''}${lost >= MESH_LOSS_HIGH ? ' lossy' : ''}`;
     const tip = meshTip(ls);
-    const line = s('line', { class: cls, x1: a.x, y1: a.y, x2: b.x, y2: b.y });
+    // end the line at the card edges, so the arrowheads are not hidden under the cards
+    const vx = b.x - a.x, vy = b.y - a.y;
+    const edge = Math.min(Math.abs(vx) > 0.1 ? (CARD_W / 2 + 3) / Math.abs(vx) : Infinity, Math.abs(vy) > 0.1 ? (CARD_H / 2 + 3) / Math.abs(vy) : Infinity);
+    const k = edge < 0.45 ? edge : 0;
+    const p1 = { x: a.x + vx * k, y: a.y + vy * k }, p2 = { x: b.x - vx * k, y: b.y - vy * k };
+    const line = s('line', { class: cls, x1: p1.x, y1: p1.y, x2: p2.x, y2: p2.y,
+      'marker-end': ab ? `url(#arrow-${lq})` : null, 'marker-start': ba ? `url(#arrow-${lq})` : null });
     line.append(s('title', {}, tip));
     lines.append(line);
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;  // quality in the middle of the line, red ring if frames are lost
+    const mx = (p1.x + p2.x) / 2, my = (p1.y + p2.y) / 2;  // quality in the middle of the line, dashed ring if frames are lost
     const badge = s('g', { class: `mesh-badge lq-${lq}${lost >= MESH_LOSS_HIGH ? ' lossy' : ''}`, transform: `translate(${mx},${my})` },
       s('circle', { r: 11 }), s('text', { y: 4, 'text-anchor': 'middle' }, String(lq)));
     badge.append(s('title', {}, tip));
@@ -200,7 +213,26 @@ function renderMesh(p) {
     svg.append(nodeCard(n, a.x - CARD_W / 2, a.y - CARD_H / 2, () => select(n.id)));
   }
   svg.append(badges);  // above the cards: a line may pass under one
-  return svg;
+  return h('div', { class: 'mesh-view' }, svg, meshLegend());
+}
+
+// what the lines and marks of the mesh mean, next to it
+function meshLegend() {
+  const sample = (cls, start, end, label) => {
+    const arrow = `url(#arrow-${(cls.match(/lq-(\d)/) || [0, 3])[1]})`;
+    return s('svg', { width: 64, height: 16, class: 'mesh-sample' },
+    s('line', { x1: 6, y1: 8, x2: 58, y2: 8, class: `mesh-link ${cls}`, 'marker-start': start ? arrow : null, 'marker-end': end ? arrow : null }),
+    label ? s('g', { class: `mesh-badge ${cls}`, transform: 'translate(32,8)' }, s('circle', { r: 7 }), s('text', { y: 4, 'text-anchor': 'middle' }, label)) : null);
+  };
+  const row = (mark, text) => [h('span', {}, mark), h('span', {}, text)];
+  return h('aside', { class: 'mesh-legend card' }, h('h3', {}, t('legend')),
+    h('div', { class: 'legend-grid' },
+      row(sample('lq-3', true, true, '3'), t('mesh.lq3')), row(sample('lq-2', true, true, '2'), t('mesh.lq2')),
+      row(sample('lq-1', true, true, '1'), t('mesh.lq1')), row(sample('lq-3', true, true), t('mesh.both')),
+      row(sample('lq-3', false, true), t('mesh.one')), row(sample('lq-1 lossy', true, true), t('mesh.lossy')),
+      row(sample('lq-3 stale', true, true), t('mesh.stale')),
+      row(h('span', { class: 'chip', style: 'background:var(--br)' }, 'BR'), t('legend.br')),
+      row(h('span', { class: 'dot dot-warn' }), t('legend.health'))));
 }
 
 // ---- table view ------------------------------------------------------------
