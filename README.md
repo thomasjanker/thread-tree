@@ -118,13 +118,25 @@ findings. A coloured dot on a card in the tree marks nodes with a warning or cri
   sniffer can still look like it skips polls. Not yet checked on real traffic (the MLE Timeout field `mle.tlv.timeout`
   is taken from Wireshark's field reference).
 
-**Tests tab: router outage.** On the **Tests** tab, pick a router and start a guided test: you cut the router's power, and the
-Diagnosis tab follows live when the router fell silent, whether the mesh dropped its links, whether the leader changed,
-and for every device that was attached to it: when it searched for a parent, when and where it attached, or that it has
-not shown up yet. Stop the test when the devices have moved (it ends by itself after 30 minutes); the last 20 reports are
-kept (`<db>.settings.json`). The program cannot switch anything off itself. Works with the sniffer, and with the active
-diagnostics' rounds; in the demo the simulator switches the router off. API: `POST /api/tests/router-outage`
-`{"router": "<node id>"}`, `POST /api/tests/stop`, `GET /api/tests`.
+**Tests tab: guided tests.** The program cannot switch, unplug or pair anything; you do that, and the test records what
+the network does, live, with times counted from the start:
+
+| Test | You | It shows |
+|---|---|---|
+| Router outage | cut a router's power | when it fell silent, whether the mesh dropped its links, where and after how long each of its devices attached elsewhere (or not yet) |
+| Leader outage | cut the leader's power | time until a new leader (after the network ID timeout, 120 s by default), new partition ID, Network Data version, its devices |
+| Border router outage | cut a border router's power | when it leaves the Network Data, which border routers are left, its devices |
+| Partition and merge | cut the router that connects two parts, then power it on | whether a second partition forms, after how long, and when the parts merge again |
+| Router upgrade | cut a router's power | whether a router-eligible end device becomes a router (below 16 routers by default), and when |
+| Router comes back | power a router on (or off and on) | when it is heard and advertises again, same router ID or a new one, devices attached to it |
+| Re-attach after a battery change | battery out and back in | silence, parent search, Parent Requests, chosen parent, time until it is back |
+| Commissioning | pair a new device | every device seen for the first time: Discovery Request, parent search, attach, parent (DTLS joining itself is encrypted) |
+
+One test at a time, it ends by itself after 30 minutes, the last 20 reports are kept (`<db>.settings.json`). With the
+sniffer the times are accurate to the second; with only the active diagnostics, changes show at the next round. In the
+demo the simulator plays your part. Not yet run on a real network; the Wireshark fields for the Network Data version
+(`mle.tlv.leader_data.data_version`) and the MLE commands come from Wireshark's reference. API: `POST /api/tests/start`
+`{"kind": "...", "target": "<node id>"}`, `POST /api/tests/stop`, `GET /api/tests`.
 
 All of it, except the values marked as active diagnostics, is measured **at the sniffer**: RSSI/LQI are what the sniffer
 received, retransmissions are repeated frames it heard (same sequence number to the same destination within 0.5 s),
@@ -175,19 +187,7 @@ Only one of them is needed to start: without a sniffer use `--source "cmd:sleep 
 Ideas derived from the Thread specification, not implemented yet. Needs: **S** sniffer, **D** diagnostic stick (its
 firmware has `ping`, `scan`, `counters`, `eidcache`), **U** the user triggers something. Suggested order: 15, 9, 8, 10.
 
-Guided tests (the user triggers, the program measures)
-1. Leader outage (S, U): time without a leader after the network ID timeout (default 120 s), new partition ID or not,
-   Network Data (version) redistributed.
-2. Border router outage (S, U): when the OMR prefix and routes leave the Network Data, whether another device takes over,
-   how long Thread devices are unreachable from the home network.
-3. Router comes back (S, U): same router ID again (IDs stay reserved for a while), time to its first advertisement,
-   whether its children return.
-4. Partition and merge (S, U): cut the only router between two parts; do two partitions form, how long the merge takes.
-5. Router upgrade (S, U): with fewer routers than the upgrade threshold (16), does a router-eligible end device become a
-   router after an outage, and when.
-6. Re-attach after a battery change (S, U): time from the first Parent Request to the Child ID Response, attempts, chosen
-   parent.
-7. Commissioning a new device (S, U): Discovery, Joiner, Entrust with timestamps, to see where pairing fails.
+Guided tests 1-7 are implemented (Tests tab, see above).
 
 Continuous checks against the standard (automatic, passive)
 

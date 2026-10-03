@@ -98,7 +98,8 @@ class Engine:
         self.diag_info: dict = {}  # status of the active collector, for the UI (not persisted)
         self.capture = NodeStats()  # all frames heard, including those without transmitter address (ACKs)
         self.last_frame_any: float | None = None  # last frame the sniffer received (not persisted)
-        self.demo_outage: tuple[str, float] | None = None  # demo only: (router id, since) switched off by an outage test
+        self.data_versions: dict[int, int] = {}  # partition id -> latest advertised Network Data version (not persisted)
+        self.demo_outage: tuple | None = None  # demo only: (router id, since) switched off by an outage test
         self.sniffer_outages: list[tuple[float, float]] = []  # periods without any frame: the sniffer was deaf
         self.pending_events: list[tuple[str, dict]] = []  # not yet saved
         self.dirty = False
@@ -314,6 +315,12 @@ class Engine:
             self._log(node, ts, "attached", to=to, **done)
             self.dirty = True
 
+    def on_discovery_request(self, ts: float, node: Node | None) -> None:
+        """MLE Discovery Request: a device looks for Thread networks, typically a new one before commissioning."""
+        if node is not None:
+            self._log(node, ts, "discovery")
+            self.dirty = True
+
     def on_child_timeout(self, ts: float, node: Node | None, seconds: int) -> None:
         if node is not None and 0 < seconds and node.child_timeout != seconds:
             node.child_timeout = seconds
@@ -351,8 +358,10 @@ class Engine:
             self.ml_votes[A.prefix64(addr)] += 1
 
     def on_leader_data(self, ts: float, sender: Node | None, partition_id: int,
-                       leader_router_id: int) -> None:
+                       leader_router_id: int, data_version: int | None = None) -> None:
         self.leaders[partition_id] = leader_router_id
+        if data_version is not None:  # Network Data version the sender has (the leader raises it on every change)
+            self.data_versions[partition_id] = data_version
         self.partition_seen[partition_id] = max(self.partition_seen.get(partition_id, ts), ts)
         self.clock = max(self.clock, ts)
         # stay with the primary partition while it is alive: no flapping between concurrent partitions

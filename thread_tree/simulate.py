@@ -47,16 +47,74 @@ def _observe(engine: Engine, now: float, ext: str, rloc16: int):
     return engine.on_frame(now, ext, rloc16)
 
 
-def off_router_id(engine: Engine) -> int | None:
-    """The router the demo's outage test switched off (engine.demo_outage = (ext, start)), if any."""
+# The demo plays the user's part of a guided test (engine.demo_outage = (target, start, kind)):
+OUTAGE_KINDS = ("router_outage", "leader_outage", "br_outage", "partition", "router_upgrade")
+RETURN_OFF = 90.0       # router_return and partition: the router is off this long, then powered on again
+LEADER_TIMEOUT = 30.0   # a partition without its leader elects a new one (the standard waits 120 s; the demo is quicker)
+PARTITION = 0x1A2B3C4D
+UPGRADE = "a4c138fffe100003"  # the full end device that becomes a router in the router-upgrade test
+NEW_DEVICE = "a4c138fffe1000aa"  # the device that is paired in the commissioning test
+
+
+def _scenario(engine: Engine) -> tuple:
     outage = getattr(engine, "demo_outage", None)
-    return next((rid for rid, (ext, _, _) in ROUTERS.items() if outage and ext == outage[0]), None)
+    return (tuple(outage) + (None,))[:3] if outage else (None, None, None)
+
+
+def off_router_id(engine: Engine, now: float | None = None) -> int | None:
+    """The router the demo switched off for a guided test, if any."""
+    target, start, kind = _scenario(engine)
+    back_on = kind in ("router_return", "partition")  # the user powers the router on again during the test
+    if target is None or not ((kind in OUTAGE_KINDS and not back_on) or kind is None
+                              or (back_on and now is not None and now - start < RETURN_OFF)):
+        return None
+    return next((rid for rid, (ext, _, _) in ROUTERS.items() if ext == target), None)
+
+
+def _components(off: int | None) -> list[set[int]]:
+    left = set(ROUTERS) - {off}
+    adj = {r: set() for r in left}
+    for a, b, *_ in LINKS:
+        if a in left and b in left:
+            adj[a].add(b)
+            adj[b].add(a)
+    comps, seen = [], set()
+    for r in sorted(left):
+        if r in seen:
+            continue
+        comp, stack = set(), [r]
+        while stack:
+            cur = stack.pop()
+            if cur not in comp:
+                comp.add(cur)
+                stack.extend(adj[cur] - comp)
+        seen |= comp
+        comps.append(comp)
+    return comps
+
+
+def leader_layout(engine: Engine, now: float, off: int | None) -> dict[int, tuple[int, int, int]]:
+    """Router id -> (partition id, leader router id, Network Data version). Without its leader (or cut off from
+    it) a part of the mesh forms a new partition with a new leader after LEADER_TIMEOUT; all merge again later."""
+    if off is None or now - _scenario(engine)[1] < LEADER_TIMEOUT:
+        return {rid: (PARTITION, 0, 7) for rid in ROUTERS if rid != off}
+    out = {}
+    for comp in _components(off):
+        if 0 in comp:
+            layout = (PARTITION, 0, 7)
+        elif len(comp) == max(len(c) for c in _components(off)) and off == 0:
+            layout = (PARTITION + 1, min(comp), 8)  # the main part: a router takes over as leader
+        else:
+            layout = (0x1A2C0000 + min(comp), min(comp), 1)  # an isolated part: a partition of its own
+        out.update({rid: layout for rid in comp})
+    return out
 
 
 def advertise(engine: Engine, now: float) -> None:
     """What every router's MLE advertisement carries: leader data and its links (Route64)."""
     with engine.lock:
-        off = off_router_id(engine)
+        off = off_router_id(engine, now)
+        layout = leader_layout(engine, now, off)
         by_router: dict[int, list] = {}
         for a, b, lq_in, lq_out in LINKS:
             if off in (a, b):
@@ -68,8 +126,13 @@ def advertise(engine: Engine, now: float) -> None:
                 continue
             entries = by_router.get(rid, [])  # a router whose only neighbour is off still advertises: no links
             node = engine.nodes.get(engine.rloc_index.get(rid << 10, ""))
-            engine.on_leader_data(now, node, 0x1A2B3C4D, 0)
+            pid, leader, version = layout[rid]
+            engine.on_leader_data(now, node, pid, leader, version)
             engine.on_route64(now, rid << 10, entries)
+        upgraded = engine.nodes.get(UPGRADE)
+        if upgraded is not None and upgraded.rloc16 == 30 << 10:  # the end device that became a router
+            engine.on_leader_data(now, upgraded, *layout.get(5, (PARTITION, 0, 7)))
+            engine.on_route64(now, 30 << 10, [(5, 3, 3, 1)])
 
 
 # ext -> (mean RSSI at the sniffer in dBm, data frames per 10 minutes, share of retransmitted frames, polls per 10 min)
@@ -209,7 +272,7 @@ def seed_active(engine: Engine, now: float, seed: int = 3) -> None:
         engine.on_mode(now, stick, True, True)      # a full Thread device that stays an end device
         engine.record_frame(now, stick, "data", 80, -45, 200, rng.randrange(256), "1400")
         routers: list[Router] = []
-        off = off_router_id(engine)
+        off = off_router_id(engine, now)
         for rid, (ext, _, is_br) in ROUTERS.items():
             if rid == off:
                 continue  # switched off by the outage test: it does not answer
@@ -309,17 +372,21 @@ class Simulator(threading.Thread):
         self.rng = random.Random(1)
         self.seqs = {ext: [self.rng.randrange(256)] for ext in PROFILES}
         self._active_at = 0.0
+        self._done: set = set()  # steps of guided tests already played
         self._stop_evt = threading.Event()
 
     def step(self, now: float) -> None:
         share = self.interval / BUCKET
         with self.engine.lock:
-            off = off_router_id(self.engine)
+            off = off_router_id(self.engine, now)
             if off is not None:
                 self._outage(now, off)
+            silent = self._play(now)
+            if off is not None:
+                silent.add(ROUTERS[off][0])  # a switched-off router is silent
             for ext in PROFILES:
                 node = self.engine.nodes.get(ext)
-                if node is not None and not (off is not None and ext == ROUTERS[off][0]):  # a switched-off router is silent
+                if node is not None and ext not in silent:
                     self.engine.on_frame(now, ext, node.rloc16)  # heard directly: stays online
                     _frames_slice(self.engine, self.rng, node, ext, now, self.seqs[ext], share)
             for node in list(self.engine.nodes.values()):
@@ -340,10 +407,56 @@ class Simulator(threading.Thread):
                 self.engine.on_frame(now, FLAPPER, _flapper_rloc(new_parent))
             self.engine.dirty = True
 
+    def _once(self, key: str) -> bool:
+        start = _scenario(self.engine)[1]
+        if (start, key) in self._done:
+            return False
+        self._done.add((start, key))
+        return True
+
+    def _play(self, now: float) -> set[str]:
+        """The other parts of the guided tests. Returns the devices that must stay silent in this step."""
+        e = self.engine
+        target, start, kind = _scenario(e)
+        silent: set[str] = set()
+        new = e.nodes.get(NEW_DEVICE)
+        if new is not None and new.rloc16 is not None:  # the paired device lives on: it polls its parent
+            e.on_frame(now, NEW_DEVICE, new.rloc16)
+            e.record_frame(now, new, "poll", 12, -66, 150, None, f"{new.rloc16 & 0xFC00:04x}")
+        if target is None and kind != "commissioning":
+            return silent
+        t = now - start
+        if kind == "br_outage" and t >= 20:
+            e.on_network_data(now, set(), complete=True)  # the border router's prefix and routes are withdrawn
+        elif kind == "router_upgrade" and t >= 45 and self._once("upgrade"):
+            e.on_frame(now, UPGRADE, 30 << 10)  # too few routers left: a router-eligible end device takes over
+        elif kind == "device_rejoin":
+            node = e.nodes.get(target)
+            if node is not None and t < 20:
+                silent.add(target)  # battery out
+            elif node is not None and node.rloc16 is not None and self._once("rejoin"):
+                parent = node.rloc16 >> 10
+                e.on_parent_request(now - 4, node)
+                e.on_parent_request(now - 2, node)
+                e.on_attach_request(now, node, e.nodes.get(ROUTERS.get(parent, ROUTERS[0])[0]))
+                e.on_frame(now, target, (parent << 10) | 60)
+        elif kind == "commissioning":
+            if t >= 15 and self._once("discovery"):
+                e.on_discovery_request(now, e.on_frame(now, NEW_DEVICE, None))
+            if t >= 18 and self._once("search"):
+                e.on_parent_request(now, e.nodes.get(NEW_DEVICE))
+            if t >= 22 and self._once("attach"):
+                node = e.nodes.get(NEW_DEVICE)
+                e.on_attach_request(now, node, e.nodes.get(ROUTERS[0][0]))
+                e.on_frame(now, NEW_DEVICE, 50)
+                e.on_mode(now, node, False, False)
+                e.on_child_timeout(now, node, 240)
+        return silent
+
     def _outage(self, now: float, off: int) -> None:
         """The outage test of the demo: the children of the switched-off router notice it after a while, search
         for a parent and attach to a neighbour of it (one after the other, the sleepy ones later)."""
-        start = self.engine.demo_outage[1]
+        start = _scenario(self.engine)[1]
         neighbours = [b if a == off else a for a, b, *_ in LINKS if off in (a, b)]
         new_rid = next((r for r in neighbours if r != off), 0)
         new_router = self.engine.nodes.get(ROUTERS[new_rid][0])

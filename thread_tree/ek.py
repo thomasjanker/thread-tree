@@ -38,6 +38,7 @@ FIELDS: dict[str, list[str]] = {
     "mle_src": ["mle.tlv.source_addr"],
     "partition": ["mle.tlv.leader_data.partition_id"],
     "leader_rid": ["mle.tlv.leader_data.router_id"],
+    "data_version": ["mle.tlv.leader_data.data_version"],
     "route_mask": ["mle.tlv.route64.id_mask"],
     "route_cost": ["mle.tlv.route64.cost"],
     "route_in": ["mle.tlv.route64.nbr_in"],
@@ -59,6 +60,7 @@ FIELDS: dict[str, list[str]] = {
 # MLE command IDs (Thread spec 4.5)
 MLE_ADVERTISEMENT = 4
 MLE_PARENT_REQUEST = 9  # a device looks for a parent
+MLE_DISCOVERY_REQUEST = 16  # a device looks for networks (before commissioning)
 MLE_CHILD_ID_REQUEST = 11  # ... and asks the one it chose (the destination)
 MLE_CHILD_ID_RESPONSE = 12  # parent -> child: carries the assigned Address16
 MLE_FROM_CHILD = (9, 11, 13)  # Parent Request, Child ID Request, Child Update Request
@@ -245,7 +247,7 @@ class Handler:
         pid = self._int(self._one(layers, "partition"))
         lrid = self._int(self._one(layers, "leader_rid"))
         if pid is not None and lrid is not None:
-            e.on_leader_data(ts, sender, pid, lrid)
+            e.on_leader_data(ts, sender, pid, lrid, self._int(self._one(layers, "data_version")))
 
         mask = self._one(layers, "route_mask")
         if mask and src16 is not None:
@@ -255,6 +257,8 @@ class Handler:
 
         if cmd == MLE_PARENT_REQUEST:
             e.on_parent_request(ts, sender)
+        elif cmd == MLE_DISCOVERY_REQUEST:
+            e.on_discovery_request(ts, sender)
         elif cmd == MLE_CHILD_ID_REQUEST:
             dst64 = self._one(layers, "dst64")
             dst16 = A.parse_rloc16(self._one(layers, "dst16") or "") if self._one(layers, "dst16") else None

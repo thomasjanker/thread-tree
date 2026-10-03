@@ -201,15 +201,30 @@ class Controller:
     # ---- guided tests -------------------------------------------------------
 
     def start_router_test(self, node_id: str) -> dict:
-        from .scenario import RouterOutageTest
+        return self.start_test("router_outage", node_id)
+
+    def start_test(self, kind: str, target: str | None) -> dict:
+        from .scenario import make_test
         with self.lock:
             self._close_finished_test()
             if self.test is not None:
                 raise TestBusy("a test is already running")
-            self.test = RouterOutageTest(self.engine, node_id, time.time())  # ValueError: not a router
-            if self.mode == "demo":  # the simulator switches the router off: the test has something to show
-                self.engine.demo_outage = (node_id, time.time())
+            now = time.time()
+            self.test = make_test(kind, self.engine, target, now)  # ValueError: unknown test, wrong device
+            if self.mode == "demo":  # the simulator plays the user's part: the test has something to show
+                self.engine.demo_outage = (target, now, kind)
+            threading.Thread(target=self._watch_test, args=(self.test,), daemon=True, name="test").start()
             return self.tests()
+
+    def _watch_test(self, test) -> None:
+        """Samples what events do not record (leader, partitions, a router coming back) while the test runs."""
+        while True:
+            time.sleep(2.0)
+            with self.lock:
+                if self.test is not test or not test.running:
+                    return
+                test.observe(self.engine, time.time())
+                self._close_finished_test()
 
     def stop_test(self) -> dict:
         with self.lock:

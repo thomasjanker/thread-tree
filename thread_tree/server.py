@@ -215,6 +215,9 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._action(controller.rebuild_topology)
             if path == "/api/diagnostics/run":
                 return self._action(controller.run_diagnostics)
+            if path == "/api/tests/start":
+                return self._action(lambda body: controller.start_test(_text(body, "kind"), body.get("target") or None),
+                                    with_body=True)
             if path == "/api/tests/router-outage":
                 return self._action(lambda body: controller.start_router_test(_text(body, "router")), with_body=True)
             if path == "/api/tests/stop":

@@ -103,3 +103,14 @@ class ChartGeometryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class GlobalNameTests(unittest.TestCase):
+    def test_no_two_scripts_declare_the_same_global(self):
+        """All scripts share one global scope: a second `const x` would stop the page from loading."""
+        import re
+        from collections import Counter
+        names = Counter()
+        for js in WEB.glob("*.js"):
+            names.update(re.findall(r"^(?:const|let|function|async function|class) ([A-Za-z_$][\w$]*)", js.read_text(), re.M))
+        self.assertEqual([n for n, c in names.items() if c > 1], [])

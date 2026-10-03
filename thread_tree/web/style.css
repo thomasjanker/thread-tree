@@ -187,3 +187,5 @@ span.mesh-badge.lq-3 { border-color: var(--ok); } span.mesh-badge.lq-1 { border-
 #diag-btn.diag-off { border-color: var(--warn); color: var(--warn); }
 .card.test-card h3 { margin: 0 0 6px; font-size: 14px; } .card.test-card select { max-width: 100%; }
 button:disabled { opacity: .5; cursor: default; } button:disabled:hover { border-color: var(--line); }
+.test-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
+.test-grid .card.test-card { display: flex; flex-direction: column; } .test-grid .card.test-card .toolbar { margin-top: auto; flex-wrap: wrap; }
