@@ -4,6 +4,7 @@ import os
 import stat
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -108,6 +109,7 @@ class ApiFixture:
     @classmethod
     def tearDownClass(cls):
         cls.server.shutdown()
+        cls.server.server_close()
         cls.controller.stop_capture()
         cls.tmp.cleanup()
 
@@ -276,3 +278,54 @@ class AccessRuleTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiagnosticsApiTests(ApiFixture, unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        now = time.time()
+        for ext, rloc in (("aa" * 8, 0x0000), ("bb" * 8, 0x2400)):
+            node = cls.engine.on_frame(now, ext, rloc)
+            cls.engine.on_leader_data(now, node, 7, 0)
+            cls.engine.record_frame(now, node, "adv", length=60, rssi=-70)
+        cls.engine.set_name("bb" * 8, "=Kueche")
+
+    def get_json(self, path):
+        status, data = self.call("GET", path)
+        return status, json.loads(data)
+
+    def test_topology_carries_the_health_of_each_node(self):
+        status, topo = self.get_json("/api/topology")
+        self.assertEqual(status, 200)
+        self.assertIn(topo["nodes"]["aa" * 8]["health"], ("ok", "info", "warn", "crit"))
+
+    def test_network_report(self):
+        status, report = self.get_json("/api/diagnostics")
+        self.assertEqual(status, 200)
+        self.assertEqual(report["summary"]["nodes"]["total"], 2)
+        self.assertIn("brief", report["nodes"]["aa" * 8])
+        self.assertEqual(report["summary"]["capture"]["frames"], 2)
+
+    def test_node_detail(self):
+        status, detail = self.get_json("/api/nodes/" + "bb" * 8 + "/diagnostics")
+        self.assertEqual(status, 200)
+        self.assertEqual((detail["role"], len(detail["series"]["frames"])), ("router", 144))
+        self.assertEqual(detail["stats"]["rssi"]["last"], -70)
+
+    def test_unknown_node_is_404(self):
+        self.assertEqual(self.call("GET", "/api/nodes/" + "00" * 8 + "/diagnostics")[0], 404)
+
+    def test_csv_export(self):
+        conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        conn.request("GET", "/api/export/nodes.csv", headers={"Host": f"localhost:{self.port}"})
+        res = conn.getresponse()
+        body = res.read().decode()
+        self.assertEqual(res.status, 200)
+        self.assertTrue(res.getheader("Content-Type").startswith("text/csv"))
+        self.assertIn("attachment", res.getheader("Content-Disposition"))
+        self.assertEqual(len(body.strip().splitlines()), 3)          # header + 2 nodes
+        self.assertIn("'=Kueche", body)                              # formula defused
+
+    def test_guarded_like_the_other_endpoints(self):
+        self.assertEqual(self.call("GET", "/api/diagnostics", headers={"Host": "evil.example:80"})[0], 403)

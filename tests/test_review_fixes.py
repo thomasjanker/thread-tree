@@ -123,6 +123,9 @@ class PersistRaceTests(unittest.TestCase):
             def save(self, state):
                 self.saved.append(state)
 
+            def maintain(self, now):
+                pass
+
         now = time.time()
         e = Engine()
         e.on_frame(now, "aa" * 8, 0x0400)
@@ -146,6 +149,9 @@ class PersistRaceTests(unittest.TestCase):
         class FailingStore:
             def save(self, state):
                 raise OSError("disk full")
+
+            def maintain(self, now):
+                pass
 
         e = Engine()
         e.on_frame(time.time(), "aa" * 8, 0x0400)

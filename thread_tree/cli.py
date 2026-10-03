@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     engine.load_state(store.load())
 
     if args.cmd == "demo":
-        populate(engine)
+        populate(engine, history=True)
         controller = Controller(engine, "demo", editable=False, locked_reason="demo", allow_remote_config=True)
     else:
         if args.channel is not None and not 11 <= args.channel <= 26:
@@ -170,6 +170,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         pass
     finally:
+        server.server_close()
         controller.stop_capture()
         if sim:
             sim.stop()

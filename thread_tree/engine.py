@@ -16,8 +16,12 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from . import addresses as A
+from .presence import presence
+from .stats import NodeStats
 
 MAX_NAME = 64
+EVENTS_PER_NODE = 200
+CAPTURE_ID = "_capture"  # statistics of the whole capture are stored like a node, under this id
 # Freshness, measured on the capture's own clock (latest observed timestamp), so a paused capture or a
 # replayed pcap keeps its last known state. Routers advertise at least every 32 s (MLE trickle).
 PARTITION_TTL = 180.0  # a partition without leader data for this long is gone (network re-formed)
@@ -46,6 +50,9 @@ class Node:
     mac_confirmed: float = 0.0  # last own frame with its MAC address, or MAC<->RLOC16 binding
     parent_hint: int | None = None  # RLOC16 of the router this end device polls, learned from MAC data requests
     last_role: str | None = None
+    stats: NodeStats = field(default_factory=NodeStats)
+    events: list = field(default_factory=list)  # {"ts", "kind", "params"}, oldest first, capped
+    sig: dict | None = None  # state at the last tick, to detect changes (not persisted)
 
 
 def end_device_role(node: Node) -> str:
@@ -71,6 +78,8 @@ class Engine:
         # user-given device names, keyed by node id (the extended address: stable across re-parenting
         # and across pruning; a name for an RLOC16-only node is dropped if that node is pruned)
         self.names: dict[str, str] = {}
+        self.capture = NodeStats()  # all frames heard, including those without transmitter address (ACKs)
+        self.pending_events: list[tuple[str, dict]] = []  # not yet saved
         self.dirty = False
 
     # ---- derived properties -------------------------------------------------
@@ -113,6 +122,19 @@ class Engine:
             return end_device_role(node)
         return ROLE_UNKNOWN
 
+    def parent_router_id(self, node: Node) -> int | None:
+        """Router ID of the parent of an end device: from its RLOC16, else from the poll destination."""
+        if node.rloc16 is not None:
+            return None if A.is_router_rloc(node.rloc16) else A.router_id(node.rloc16)
+        return A.router_id(node.parent_hint) if node.parent_hint is not None else None
+
+    def _log(self, node: Node, ts: float, kind: str, **params) -> None:
+        event = {"ts": ts, "kind": kind, "params": params}
+        node.events.append(event)
+        if len(node.events) > EVENTS_PER_NODE:
+            del node.events[:-EVENTS_PER_NODE]
+        self.pending_events.append((node.id, event))
+
     # ---- node resolution ----------------------------------------------------
 
     def node_for(self, ts: float, ext: str | None = None, rloc16: int | None = None,
@@ -125,8 +147,9 @@ class Engine:
             node = self.nodes.get(ext)
             if node is None:
                 node = self.nodes[ext] = Node(id=ext, ext=ext, first_seen=ts, last_seen=ts)
+                self._log(node, ts, "first_seen", how="heard" if touch else "mentioned")
             if rloc16 is not None:
-                self._bind(node, rloc16)
+                self._bind(node, rloc16, ts)
             if (touch or rloc16 is not None) and ts > node.mac_confirmed:
                 node.mac_confirmed = ts  # its MAC was seen in its own frame, or tied to its RLOC16
         else:
@@ -136,13 +159,14 @@ class Engine:
                 node = Node(id=f"rloc16:{rloc16:04x}", rloc16=rloc16, first_seen=ts, last_seen=ts)
                 self.nodes[node.id] = node
                 self.rloc_index[rloc16] = node.id
+                self._log(node, ts, "first_seen", how="heard" if touch else "mentioned")
         if touch and ts > node.last_seen:
             node.last_seen = ts
         self.clock = max(self.clock, ts)
         self.dirty = True
         return node
 
-    def _bind(self, node: Node, rloc16: int) -> None:
+    def _bind(self, node: Node, rloc16: int, ts: float) -> None:
         current = self.rloc_index.get(rloc16)
         if current == node.id:
             node.rloc16 = rloc16
@@ -151,6 +175,7 @@ class Engine:
             other = self.nodes[current]
             if other.ext is None:
                 self._merge(other, node)
+                self._log(node, ts, "mac_learned", rloc16=f"0x{rloc16:04x}")
             else:
                 other.rloc16 = None  # stale: RLOC16 was reassigned
         if node.rloc16 is not None and self.rloc_index.get(node.rloc16) == node.id:
@@ -175,6 +200,13 @@ class Engine:
         into.last_seen = max(into.last_seen, prov.last_seen)
         into.last_heard = max(into.last_heard, prov.last_heard)
         into.last_addressed = max(into.last_addressed, prov.last_addressed)
+        into.stats.merge(prov.stats)
+        self.pending_events = [(nid, ev) for nid, ev in self.pending_events if nid != prov.id]
+        for event in prov.events:  # the history follows the device to its stable id (and is saved under it)
+            into.events.append(event)
+            self.pending_events.append((into.id, event))
+        into.events.sort(key=lambda e: e["ts"])
+        del into.events[:-EVENTS_PER_NODE]
         self.nodes.pop(prov.id, None)
         if prov.id in self.names:  # the name follows the device to its stable id
             self.names.setdefault(into.id, self.names.pop(prov.id))
@@ -196,7 +228,8 @@ class Engine:
             node.last_heard = ts
         return node
 
-    def on_destination(self, ts: float, dst_ext: str | None, dst_rloc16: int | None = None) -> None:
+    def on_destination(self, ts: float, dst_ext: str | None, dst_rloc16: int | None = None,
+                       length: int | None = None) -> None:
         """MAC destination of a frame: another node addresses this one. Proves that the device exists
         and is still being talked to, but not that it is alive (that needs its own frames)."""
         if dst_ext == "ffffffffffffffff":
@@ -207,8 +240,20 @@ class Engine:
             return
         # a frame carries one destination address: MAC or short, never both
         node = self.node_for(ts, ext=dst_ext, touch=False) if dst_ext else self.node_for(ts, rloc16=dst_rloc16, touch=False)
-        if node is not None and ts > node.last_addressed:
-            node.last_addressed = ts
+        if node is not None:
+            node.stats.record_addressed(ts, length)
+            if ts > node.last_addressed:
+                node.last_addressed = ts
+
+    def record_frame(self, ts: float, node: Node | None, kind: str, length: int | None = None,
+                     rssi: float | None = None, lqi: float | None = None, seq: int | None = None,
+                     dst: str | None = None) -> None:
+        """Statistics of one frame heard. node is None when the frame has no transmitter address (ACKs)."""
+        if node is not None:
+            node.stats.record_frame(ts, kind, length, rssi, lqi, seq, dst)
+        self.capture.record_frame(ts, kind, length, rssi, lqi)
+        self.clock = max(self.clock, ts)
+        self.dirty = True
 
     def on_address_assignment(self, ts: float, ext: str | None, rloc16: int | None) -> None:
         """A parent told a child its new RLOC16 (Child ID Response): binds MAC address and short address."""
@@ -333,6 +378,41 @@ class Engine:
                     node.border_router = False
         self.dirty = True
 
+    # ---- history ------------------------------------------------------------
+
+    def _signature(self, node: Node, now: float) -> dict:
+        role = self.role_of(node)
+        online, _ = presence(node.last_heard, node.last_seen, node.last_addressed, role, now)
+        return {"role": role, "rloc16": node.rloc16, "parent": self.parent_router_id(node),
+                "partition": self.partition_of(node), "br": node.border_router, "online": online}
+
+    def tick(self, now: float) -> None:
+        """Compare every node with its state at the previous tick and record what changed. Call it regularly
+        with the wall-clock time (online/offline is time based). The first tick only sets the baseline."""
+        with self.lock:
+            for node in self.nodes.values():
+                sig = self._signature(node, now)
+                old = node.sig
+                node.sig = sig
+                if old is None:
+                    continue
+                if sig["role"] != old["role"]:
+                    self._log(node, now, "role", **{"from": old["role"], "to": sig["role"]})
+                if sig["rloc16"] != old["rloc16"]:
+                    hexed = lambda v: None if v is None else f"0x{v:04x}"
+                    self._log(node, now, "rloc16", **{"from": hexed(old["rloc16"]), "to": hexed(sig["rloc16"])})
+                if sig["parent"] != old["parent"]:
+                    self._log(node, now, "parent", **{"from": old["parent"], "to": sig["parent"]})
+                if sig["partition"] != old["partition"]:
+                    self._log(node, now, "partition", **{"from": old["partition"], "to": sig["partition"]})
+                if sig["br"] != old["br"]:
+                    self._log(node, now, "br_on" if sig["br"] else "br_off")
+                if sig["online"] != old["online"]:
+                    self._log(node, now, "online" if sig["online"] else "offline")
+            self.capture.prune(now)
+            for node in self.nodes.values():
+                node.stats.prune(now)
+
     def set_name(self, node_id: str, name: str | None) -> str | None:
         """Give a device a name; an empty name removes it. Returns the stored name."""
         with self.lock:
@@ -360,6 +440,7 @@ class Engine:
             for nid in dropped:
                 del self.names[nid]
             self.nodes.clear()
+            self.pending_events.clear()
             self.rloc_index.clear()
             self.links.clear()
             self.leaders.clear()
@@ -396,12 +477,22 @@ class Engine:
                 self.dirty = False
             for node in self.nodes.values():
                 node.last_role = self.role_of(node)
+            bucket_updates = [(n.id, i, vals) for n in self.nodes.values() for i, vals in n.stats.bucket_rows()]
+            bucket_updates += [(CAPTURE_ID, i, vals) for i, vals in self.capture.bucket_rows()]
+            events_new = [(nid, ev["ts"], ev["kind"], ev["params"]) for nid, ev in self.pending_events]
+            if clear_dirty:
+                for node in self.nodes.values():
+                    node.stats.dirty.clear()
+                self.capture.dirty.clear()
+                self.pending_events = []
             return {
+                "bucket_updates": bucket_updates, "events_new": events_new,
                 "nodes": [
                     {**{k: getattr(n, k) for k in (
                         "id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
-                        "border_router", "br_seen", "mac_confirmed", "first_seen", "last_seen", "last_heard", "last_addressed", "parent_hint",
-                        "last_role")},
+                        "border_router", "br_seen", "mac_confirmed", "first_seen", "last_seen", "last_heard",
+                        "last_addressed", "parent_hint", "last_role")},
+                     "stats": n.stats.to_json(),
                      "addresses": {a: list(t) for a, t in n.addresses.items()}}
                     for n in self.nodes.values()
                 ],
@@ -414,13 +505,29 @@ class Engine:
                     "primary_partition": self.primary_partition,
                     "ml_votes": {str(k): v for k, v in self.ml_votes.items()},
                     "fixed_ml_prefix": self.fixed_ml_prefix,
+                    "capture_stats": self.capture.to_json(),
                 },
             }
+
+    def restore_unsaved(self, state: dict) -> None:
+        """A save failed: make the exported changes pending again so the next save retries them."""
+        with self.lock:
+            for node_id, idx, _ in state.get("bucket_updates", []):
+                target = self.capture if node_id == CAPTURE_ID else (
+                    self.nodes[node_id].stats if node_id in self.nodes else None)
+                if target is not None and idx in target.buckets:
+                    target.dirty.add(idx)
+            self.pending_events = [(nid, {"ts": ts, "kind": kind, "params": params})
+                                   for nid, ts, kind, params in state.get("events_new", [])] + self.pending_events
+            self.dirty = True
 
     def load_state(self, state: dict) -> None:
         with self.lock:
             for d in state.get("nodes", []):
+                d = dict(d)
+                stats = NodeStats.from_json(d.pop("stats", None))
                 node = Node(**{**d, "addresses": {a: list(t) for a, t in d.get("addresses", {}).items()}})
+                node.stats = stats
                 if node.rloc16 is not None and not A.is_valid_rloc16(node.rloc16):  # written by an older version
                     if node.ext is None:
                         continue  # a pseudo node made of an invalid short address: drop it
@@ -436,6 +543,18 @@ class Engine:
             self.leaders = {int(k): v for k, v in meta.get("leaders", {}).items()}
             self.partition_seen = {int(k): v for k, v in meta.get("partition_seen", {}).items()}
             self.clock = meta.get("clock", 0.0)
+            self.capture = NodeStats.from_json(meta.get("capture_stats"))
+            for node_id, idx, values in state.get("buckets", []):
+                target = self.capture if node_id == CAPTURE_ID else (
+                    self.nodes[node_id].stats if node_id in self.nodes else None)
+                if target is not None:
+                    target.load_bucket(idx, values)
+            for node_id, ts, kind, params in state.get("events", []):
+                if node_id in self.nodes:
+                    self.nodes[node_id].events.append({"ts": ts, "kind": kind, "params": params})
+            for node in self.nodes.values():
+                node.events.sort(key=lambda e: e["ts"])
+                del node.events[:-EVENTS_PER_NODE]
             self.primary_partition = meta.get("primary_partition")
             self.ml_votes = Counter({int(k): v for k, v in meta.get("ml_votes", {}).items()})
             if self.fixed_ml_prefix is None:  # a dataset given on the command line wins

@@ -7,10 +7,8 @@ import time
 
 from . import addresses as A
 from .engine import Engine, Node, ROLE_LEADER, ROLE_ROUTER, ROLE_UNKNOWN
+from .presence import presence
 
-# Seconds without a frame before a node is shown as offline.
-OFFLINE_AFTER = {"leader": 900, "router": 900, "med": 3600, "fed": 3600, "sed": 6 * 3600,
-                 "child": 6 * 3600, "unknown": 6 * 3600}
 # After this long without a frame that shows the MAC address, the device is identified only through its
 # short address: if that address was handed to another device unnoticed, the name could be on the wrong one.
 IDENTITY_VIA_RLOC_AFTER = 3600.0
@@ -18,13 +16,8 @@ _TYPE_ORDER = {A.ML_EID: 0, A.OMR: 1, A.RLOC: 2, A.ALOC: 3, A.LINK_LOCAL: 4, A.U
 
 
 def _online(n: Node, role: str, now: float) -> dict:
-    """A device that was ever heard is judged only by its own activity. A device never heard
-    directly counts as "online (indirect)" while other nodes keep sending frames to it."""
-    limit = OFFLINE_AFTER.get(role, 3600)
-    if n.last_heard > 0:
-        return {"online": now - n.last_seen <= limit, "online_indirect": False}
-    indirect = now - max(n.last_seen, n.last_addressed) <= limit
-    return {"online": indirect, "online_indirect": indirect}
+    online, indirect = presence(n.last_heard, n.last_seen, n.last_addressed, role, now)
+    return {"online": online, "online_indirect": indirect}
 
 
 def _node_addresses(engine: Engine, node: Node, role: str) -> list[dict]:

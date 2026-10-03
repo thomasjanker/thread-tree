@@ -11,13 +11,14 @@ import ipaddress
 import json
 import re
 import socket
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .engine import Engine
 from .runtime import ConfigLocked, Controller
-from .topology import snapshot
+from .diagnose import node_diagnostics, nodes_csv, report
 
 WEB_DIR = Path(__file__).parent / "web"
 MAX_BODY = 8192
@@ -65,15 +66,22 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
         def log_message(self, *args):  # quiet: never log request data
             pass
 
-        def _send(self, code: int, body: bytes, ctype: str) -> None:
+        def _send(self, code: int, body: bytes, ctype: str, headers: dict | None = None) -> None:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
+            for key, value in (headers or {}).items():
+                self.send_header(key, value)
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'")
             self.end_headers()
             self.wfile.write(body)
+
+        def _report(self) -> tuple[dict, dict]:
+            status = controller.status()
+            capture = {"running": status.get("capture_running", False), "stats": status.get("stats", {})}
+            return report(engine, time.time(), capture)
 
         def _json(self, code: int, obj) -> None:
             self._send(code, json.dumps(obj).encode(), _TYPES[".json"])
@@ -89,7 +97,19 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return
             path = self.path.split("?", 1)[0]
             if path == "/api/topology":
-                return self._json(200, snapshot(engine))
+                return self._json(200, self._report()[0])
+            if path == "/api/diagnostics":
+                return self._json(200, self._report()[1])
+            if path == "/api/export/nodes.csv":
+                snap, analysis = self._report()
+                body = nodes_csv(engine, snap, analysis, time.time()).encode("utf-8")
+                return self._send(200, body, "text/csv; charset=utf-8",
+                                  {"Content-Disposition": 'attachment; filename="thread-tree-nodes.csv"'})
+            detail = re.fullmatch(r"/api/nodes/([^/]+)/diagnostics", path)
+            if detail:
+                snap, analysis = self._report()
+                result = node_diagnostics(engine, snap, analysis, unquote(detail.group(1)), time.time())
+                return self._json(404, {"error": "unknown node"}) if result is None else self._json(200, result)
             if path == "/api/status":
                 return self._json(200, controller.status())
             if path == "/api/config":

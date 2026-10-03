@@ -23,6 +23,12 @@ FIELDS: dict[str, list[str]] = {
     "dst16": ["wpan.dst16"],
     "mle_addr16": ["mle.tlv.addr16"],
     "mac_cmd": ["wpan.cmd"],
+    "frame_type": ["wpan.frame_type"],
+    "seq": ["wpan.seq_no"],
+    "rssi": ["wpan-tap.rss"],  # present with the sniffer's ieee802154-tap metadata
+    "lqi": ["wpan-tap.lqi"],
+    "frame_len": ["frame.len"],
+    "tap_len": ["wpan-tap.length"],
     "ip_src": ["ipv6.src"],
     "ip_dst": ["ipv6.dst"],
     "mle_cmd": ["mle.cmd"],
@@ -112,6 +118,42 @@ class Handler:
             return None
 
     @staticmethod
+    def _number(text: str | None) -> float | None:
+        if text is None:
+            return None
+        try:
+            return int(text, 0)
+        except ValueError:
+            try:
+                return float(text)
+            except ValueError:
+                return None
+
+    def _frame_bytes(self, layers: dict) -> int | None:
+        """Size of the 802.15.4 frame: the captured frame minus the TAP pseudo header, if there is one."""
+        total = self._int(self._one(layers, "frame_len"))
+        tap = self._int(self._one(layers, "tap_len"))
+        if total is None:
+            return None
+        return total - tap if tap and 0 < tap < total else total
+
+    def _kind(self, layers: dict, mle_cmd: int | None, mac_cmd: int | None, addressed: bool) -> str:
+        frame_type = self._int(self._one(layers, "frame_type"))
+        if frame_type == 2 or (frame_type is None and not addressed and mle_cmd is None and mac_cmd is None):
+            return "ack"  # acknowledgements carry no addresses
+        if frame_type == 0:
+            return "beacon"
+        if mle_cmd is not None:
+            return "adv" if mle_cmd == MLE_ADVERTISEMENT else "mle"
+        if any(self._present(layers, k) for k in ("mle_no_key", "mle_decrypt_failed", "mle_mic_failed")):
+            return "mle"  # an MLE message that could not be decrypted
+        if mac_cmd == MAC_DATA_REQUEST:
+            return "poll"
+        if mac_cmd is not None:
+            return "cmd"
+        return "data" if frame_type in (None, 1) else "other"
+
+    @staticmethod
     def _bool(text: str | None) -> bool | None:
         if text is None:
             return None
@@ -149,14 +191,21 @@ class Handler:
         dst_ext = A.normalize_ext(dst64) if dst64 else None
         dst16_text = self._one(layers, "dst16")
         dst16 = A.parse_rloc16(dst16_text) if dst16_text else None
-        e.on_destination(ts, dst_ext, dst16)
+        length = self._frame_bytes(layers)
+        e.on_destination(ts, dst_ext, dst16, length)
 
-        if self._int(self._one(layers, "mac_cmd")) == MAC_DATA_REQUEST:
+        mac_cmd = self._int(self._one(layers, "mac_cmd"))
+        if mac_cmd == MAC_DATA_REQUEST:
             e.on_data_poll(ts, sender)
             e.on_data_request(ts, sender, dst16, dst_ext, sender_by_mac=ext is not None and src16 is None)
         e.on_ip(ts, sender, ip_src, self._one(layers, "ip_dst"))
 
         mle_cmd = self._int(self._one(layers, "mle_cmd"))
+        addressed = any(v is not None for v in (src64, src16, dst64, dst16))
+        e.record_frame(ts, sender, self._kind(layers, mle_cmd, mac_cmd, addressed), length,
+                       self._number(self._one(layers, "rssi")), self._number(self._one(layers, "lqi")),
+                       self._int(self._one(layers, "seq")),
+                       dst_ext or (f"{dst16:04x}" if dst16 is not None else None))
         if any(self._present(layers, k) for k in ("mle_no_key", "mle_decrypt_failed", "mle_mic_failed")):
             self.stats["mle_failed"] += 1
         elif mle_cmd is not None:
