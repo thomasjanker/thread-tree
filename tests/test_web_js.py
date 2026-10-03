@@ -7,7 +7,7 @@ from pathlib import Path
 
 WEB = Path(__file__).resolve().parent.parent / "thread_tree" / "web"
 NAMES = ("fmtDuration, fmtBytes, fmtPct, fmtDbm, fmtDb, fmtPercentValue, fmtThreadVersion, fmtCost, fillTemplate, "
-         "niceMax, scaleLinear, hourTicks, rssiRange")
+         "niceMax, gridSteps, scaleLinear, hourTicks, rssiRange")
 
 HARNESS = r"""
 const {GLib} = imports.gi;
@@ -69,6 +69,10 @@ class ChartGeometryTests(unittest.TestCase):
     def test_nice_max(self):
         got = run([["niceMax", v] for v in (0, -3, 0.3, 1, 2, 4.9, 5, 5.1, 7, 12, 140, 1000, 1001)])
         self.assertEqual(got, [1, 1, 0.5, 1, 2, 5, 5, 10, 10, 20, 200, 1000, 2000])
+
+    def test_grid_labels_are_whole_numbers(self):
+        got = run([["gridSteps", v] for v in (1, 2, 5, 10, 20, 50, 100, 200, 500, 1000)])
+        self.assertEqual(got, [1, 2, 5, 5, 4, 5, 5, 4, 5, 5])      # 10 -> 2, 4, 6 ...; an empty chart (max 1) -> 0, 1
 
     def test_scale(self):
         got = run([["scale", 0, 10, 100, 0, 0, 5, 10], ["scale", 3, 3, 0, 100, 3]])

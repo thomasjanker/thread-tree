@@ -156,7 +156,8 @@ function overviewCards(sum) {
       fillTemplate(t('diag.card.links.sub'), { stale: sum.links.stale }, (k, v) => v),
       h('div', { class: 'lqdist' }, ...[3, 2, 1].map(q => h('span', { class: 'lqchip', title: `LQ ${q}` }, lqMeter(q), String(lq[q]))))),
     card(t('diag.card.capture'), cap.last_frame_age === null ? '–' : fmtDuration(cap.last_frame_age),
-      decrypted === null ? fillTemplate(t('diag.card.capture.sub.nodecrypt'), { frames: cap.frames_last_hour }, (k, v) => v)
+      cap.last_frame_age === null && cap.frames_last_hour === 0 ? t('diag.card.capture.none')
+        : decrypted === null ? fillTemplate(t('diag.card.capture.sub.nodecrypt'), { frames: cap.frames_last_hour }, (k, v) => v)
         : fillTemplate(t('diag.card.capture.sub'), { frames: cap.frames_last_hour, pct: fmtPct(decrypted) }, (k, v) => v)),
     activeCard(sum.active),
     card(t('diag.card.since'), cap.first_frame ? ago(cap.first_frame) : '–', cap.first_frame ? absTime(cap.first_frame) : null));
@@ -267,9 +268,11 @@ function kindBar(kinds) {
     h('div', { class: 'kindlegend' }, ...order.map(k => h('span', {}, h('i', { class: `swatch kind-${k}` }), `${t('kind.' + k)} ${kinds[k]} (${fmtPct(kinds[k] / total)})`))));
 }
 
+const noSniffer = d => d.stats.frames === 0;  // the sniffer never received a frame from this device
+
 function signalSection(d) {
   const r = d.stats.rssi;
-  if (!r) return section('diag.sec.signal', h('p', { class: 'muted' }, t('diag.no_rssi')));
+  if (!r) return section('diag.sec.signal', h('p', { class: 'muted' }, t(noSniffer(d) ? 'diag.nosniffer' : 'diag.no_rssi')));
   const w24 = d.stats.last_24h;
   const labels = { lang: state.lang, title: t('diag.chart.rssi'), weak: RSSI_WEAK_DBM };
   return section('diag.sec.signal',
@@ -286,6 +289,7 @@ function trafficSection(d) {
   const st = d.stats, w1 = st.last_hour, w24 = st.last_24h;
   const labels = { lang: state.lang, title: t('diag.chart.activity'), frames: t('diag.frames'), retries: t('diag.retries') };
   return section('diag.sec.traffic',
+    noSniffer(d) ? h('p', { class: 'muted' }, t('diag.nosniffer')) : null,
     h('div', { class: 'tiles' },
       tile(t('diag.t.frames_hour'), String(w1.frames)), tile(t('diag.t.frames_24h'), String(w24.frames)),
       tile(t('diag.t.frames_total'), String(st.frames)), tile(t('diag.t.bytes'), fmtBytes(st.bytes), t('diag.t.bytes.tip')),
@@ -397,6 +401,7 @@ function renderNodeDiag() {
     h('dt', {}, t('diag.t.heard')), h('dd', {}, d.heard ? ago(d.last_heard) : t('reach.indirect')),
     d.version !== null && d.version !== undefined ? [h('dt', {}, t('d.version')), h('dd', {}, fmtThreadVersion(d.version))] : [],
     d.vendor ? [h('dt', {}, t('d.vendor')), h('dd', {}, [d.vendor.name, d.vendor.model].filter(Boolean).join(' · ') || '–', d.vendor.sw ? ` (${d.vendor.sw})` : '')] : [],
+    d.vendor && d.vendor.stack ? [h('dt', {}, t('d.stack')), h('dd', { class: 'mono' }, d.vendor.stack)] : [],
     d.last_diag ? [h('dt', {}, t('d.diag')), h('dd', {}, ago(d.last_diag))] : []);
   return h('div', { class: 'diag' },
     h('div', { class: 'diag-head' }, back, h('h2', {}, title), roleChip(d.role), d.border_router ? abbr('BR') : null,

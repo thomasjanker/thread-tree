@@ -31,6 +31,13 @@ function hourTicks(startTs, bucketSeconds, count, everyHours, tzOffsetMinutes) {
   return ticks;
 }
 
+// number of grid intervals for a "nice" maximum (1, 2, 5, 10, 20, 50 ...) so that every label is a whole number
+function gridSteps(yMax) {
+  if (yMax <= 5) return Math.max(1, Math.round(yMax));
+  const lead = Math.round(yMax / Math.pow(10, Math.floor(Math.log10(yMax))));
+  return lead === 2 ? 4 : 5;
+}
+
 function gridLines(svg, plot, yMax, steps, unit) {
   const y = scaleLinear(0, yMax, plot.y + plot.h, plot.y);
   for (let k = 0; k <= steps; k++) {
@@ -55,7 +62,7 @@ function activityChart(series, labels) {
   const n = series.frames.length, H = 170, plot = { x: 40, y: 8, w: CHART_W - 50, h: H - 36 };
   const yMax = niceMax(Math.max(1, ...series.frames));
   const svg = s('svg', { viewBox: `0 0 ${CHART_W} ${H}`, class: 'chart', role: 'img', 'aria-label': labels.title });
-  const y = gridLines(svg, plot, yMax, 4);
+  const y = gridLines(svg, plot, yMax, gridSteps(yMax));
   xAxis(svg, plot, hourTicks(series.start, series.bucket_seconds, n, 3), n);
   const step = plot.w / n;
   for (let i = 0; i < n; i++) {
