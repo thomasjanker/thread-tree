@@ -10,6 +10,7 @@ RLOC16 at snapshot time, never stored.
 
 from __future__ import annotations
 
+import bisect
 import ipaddress
 import threading
 from collections import Counter
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from . import addresses as A
 from . import behavior as B
 from .otdiag import Child, Netdata, Router, RouterNeighbor
-from .presence import presence
+from .presence import OFFLINE_AFTER, presence
 from .stats import NodeStats
 
 MAX_NAME = 64
@@ -68,6 +69,14 @@ class Node:
     sig: dict | None = None  # state at the last tick, to detect changes (not persisted)
 
 
+def _service_kind(enterprise: int | None, data: str | None) -> str:
+    """Thread services (enterprise number 44970): 0x01 backbone router, 0x5c/0x5d SRP server, else other."""
+    if enterprise == 44970 and data:
+        head = data.lower()[:2]
+        return {"01": "bbr", "5c": "srp", "5d": "srp"}.get(head, "other")
+    return "other"
+
+
 def end_device_role(node: Node) -> str:
     if node.ftd is True:
         return ROLE_FED  # FED or REED: indistinguishable passively
@@ -94,6 +103,7 @@ class Engine:
         # measurements between routers, from the neighbour tables: (measuring router id, neighbour router id) -> dict
         self.link_metrics: dict[tuple[int, int], dict] = {}
         self.contexts: dict[int, int] = {}  # 6LoWPAN context id -> upper 64 bits of its prefix (from Network Data)
+        self.services: dict[int, list] = {}  # server RLOC16 -> [{"id", "kind"}] (from the Network Data of the diagnostics)
         self.diag_self: str | None = None  # extended address of the node that runs the active diagnostics
         self.diag_ts = 0.0  # time of the latest topology answer of the active diagnostics
         self.diag_ttl = DIAG_TTL  # how long its answers count as current (the collector raises it for long intervals)
@@ -104,6 +114,7 @@ class Engine:
         self.data_version_ts: dict[int, float] = {}  # ... and when it appeared
         self.net_events: list[dict] = []  # events of the network as a whole, oldest first
         self._net_state: dict = {}  # what the network looked like at the last check (to log changes; not persisted)
+        self._last_tick: float | None = None
         self.demo_outage: tuple | None = None  # demo only: (router id, since) switched off by an outage test
         self.sniffer_outages: list[tuple[float, float]] = []  # periods without any frame: the sniffer was deaf
         self.pending_events: list[tuple[str, dict]] = []  # not yet saved
@@ -169,7 +180,10 @@ class Engine:
 
     def _log(self, node: Node, ts: float, kind: str, **params) -> None:
         event = {"ts": ts, "kind": kind, "params": params}
-        node.events.append(event)
+        if node.events and ts < node.events[-1]["ts"]:  # dated back to when it happened: keep the order
+            bisect.insort(node.events, event, key=lambda e: e["ts"])
+        else:
+            node.events.append(event)
         if len(node.events) > EVENTS_PER_NODE:
             del node.events[:-EVENTS_PER_NODE]
         self.pending_events.append((node.id, event))
@@ -220,6 +234,7 @@ class Engine:
         if node.rloc16 is not None and self.rloc_index.get(node.rloc16) == node.id:
             del self.rloc_index[node.rloc16]
         node.rloc16 = rloc16
+        node.behavior["rloc_ts"] = ts  # when it changed: the history dates the parent change to this moment
         self.rloc_index[rloc16] = node.id
 
     def _merge(self, prov: Node, into: Node) -> None:
@@ -305,7 +320,7 @@ class Engine:
         if node is not None:
             retry = node.stats.record_frame(ts, kind, length, rssi, lqi, seq, dst)
             if kind == "poll" and not retry:
-                gap = B.on_poll(node.behavior, ts, self.sniffer_was_down)
+                gap = B.on_poll(node.behavior, ts, self.sniffer_was_down, node.child_timeout)
                 if gap:
                     self._log(node, ts, "poll_gap", timeout=node.child_timeout, **gap)
             elif kind == "adv" and not retry:
@@ -323,7 +338,7 @@ class Engine:
         """A Child ID Request that got no Child ID Response: the router did not accept the device (full child
         table, or the frames got lost)."""
         pending = node.behavior.pop("attach", None)
-        if pending and ts - pending["ts"] >= B.ATTACH_ANSWER:
+        if pending and B.ATTACH_ANSWER <= ts - pending["ts"] <= B.ATTACH_RETRY:
             self._log(node, ts, "attach_unanswered", router=pending["router"])
 
     def on_parent_response(self, ts: float, router: Node | None, child_ext: str | None, margin: int | None) -> None:
@@ -368,6 +383,19 @@ class Engine:
             restart = B.on_frame_counter(node.behavior, ts, counter, key)
             if restart:
                 self._log(node, ts, "reboot", **restart)
+
+    def on_csl(self, ts: float, node: Node | None, period: int | None = None) -> None:
+        """The device uses CSL (Thread 1.2 synchronized sleepy end device): its parent sends at agreed times, it does
+        not poll in a rhythm, so poll gaps say nothing about it."""
+        if node is not None and not node.behavior.get("csl"):
+            node.behavior["csl"] = period or True
+            self.dirty = True
+
+    def on_router_restart(self, ts: float, node: Node | None) -> None:
+        """Multicast MLE Link Request of a router: it re-establishes its links after a restart."""
+        if node is not None and ts - node.behavior.get("restart_ts", 0.0) > 60.0:
+            node.behavior["restart_ts"] = ts
+            self._log(node, ts, "reboot", how="link_request")
 
     def on_supervision_interval(self, ts: float, node: Node | None, seconds: int) -> None:
         """Supervision Interval TLV of a child (Thread 1.2): its parent must contact it at least this often."""
@@ -427,7 +455,8 @@ class Engine:
                     self._net_log(ts, "netdata_version", partition=partition_id, version=data_version)
                 self.data_versions[partition_id] = current = data_version
                 self.data_version_ts[partition_id] = ts
-            if sender is not None:
+            if sender is not None and sender.rloc16 is not None and A.is_router_rloc(sender.rloc16):
+                # routers only: an end device without full Network Data may legitimately keep an older version
                 self._netdata_lag(ts, sender, data_version, current, self.data_version_ts.get(partition_id, ts))
         self.partition_seen[partition_id] = max(self.partition_seen.get(partition_id, ts), ts)
         self.clock = max(self.clock, ts)
@@ -655,10 +684,24 @@ class Engine:
             self.dirty = True
 
     def on_diag_netdata(self, ts: float, data: Netdata) -> None:
-        """Network Data as the diagnostic node sees it (it asks for the full copy): contexts and border routers."""
+        """Network Data as the diagnostic node sees it (it asks for the full copy): contexts, border routers and the
+        servers of services (each service has an anycast address: ALOC 0xfc10 + service id; the primary backbone
+        router also 0xfc38)."""
         with self.lock:
             self.contexts.update(data.context_prefixes64())
+            services: dict[int, list] = {}
+            for s in data.services:
+                if s.get("rloc16") is not None and s.get("id") is not None:
+                    services.setdefault(s["rloc16"], []).append(
+                        {"id": s["id"], "kind": _service_kind(s.get("enterprise"), s.get("data"))})
+            self.services = services
             self.on_network_data(ts, data.border_router_rloc16s(), complete=True)
+
+    def on_contexts(self, contexts: dict[int, int]) -> None:
+        """6LoWPAN contexts from the Network Data the sniffer heard (context id -> upper 64 bits of the prefix)."""
+        if any(self.contexts.get(cid) != prefix for cid, prefix in contexts.items()):
+            self.contexts.update(contexts)
+            self.dirty = True
 
     def on_diag_vendor(self, ts: float, rloc16: int, info: dict | None) -> None:
         """Vendor data of the device with this RLOC16; info None if it did not answer (do not ask again at once)."""
@@ -674,9 +717,35 @@ class Engine:
 
     # ---- history ------------------------------------------------------------
 
+    def offline_limit(self, node: Node, role: str) -> float:
+        """Silence after which a device counts as offline, from its own rhythm where the sniffer knows it: a router
+        advertises at least every 32 s, a child must reach its parent within its child timeout. Otherwise the
+        defaults per role (presence.OFFLINE_AFTER)."""
+        base = float(OFFLINE_AFTER.get(role, 3600))
+        if not node.last_heard:
+            return base  # known only from others' frames: their rhythm says nothing about this device
+        if role in (ROLE_LEADER, ROLE_ROUTER):
+            adv = node.stats.adv.summary()
+            return min(base, max(300.0, 10 * adv["mean"])) if adv and adv["n"] >= 10 else base
+        if node.child_timeout:  # its parent drops it after the timeout; margin for frames the sniffer missed
+            usual = B.usual_interval(node.behavior) or 0.0
+            return min(base, max(300.0, 2.0 * node.child_timeout, 4.0 * usual))
+        return base
+
+    def presence_now(self, now: float) -> float:
+        """The time online/offline is judged at. While the sniffer hears nothing at all it is the sniffer, not the
+        network, that is silent: time stands still at its last frame, nobody goes offline because of it."""
+        if self.last_frame_any is not None and now - self.last_frame_any > B.SNIFFER_OUTAGE:
+            return self.last_frame_any + B.SNIFFER_OUTAGE
+        return now
+
+    def presence_of(self, node: Node, role: str, now: float) -> tuple[bool, bool]:
+        return presence(node.last_heard, node.last_seen, node.last_addressed, role, self.presence_now(now),
+                        node.last_diag, self.diag_ttl, self.offline_limit(node, role))
+
     def _signature(self, node: Node, now: float) -> dict:
         role = self.role_of(node)
-        online, _ = presence(node.last_heard, node.last_seen, node.last_addressed, role, now, node.last_diag, self.diag_ttl)
+        online, _ = self.presence_of(node, role, now)
         return {"role": role, "rloc16": node.rloc16, "parent": self.parent_router_id(node),
                 "partition": self.partition_of(node), "br": node.border_router, "online": online}
 
@@ -684,28 +753,36 @@ class Engine:
         """Compare every node with its state at the previous tick and record what changed. Call it regularly
         with the wall-clock time (online/offline is time based). The first tick only sets the baseline."""
         with self.lock:
+            prev = self._last_tick if self._last_tick is not None else now
+            self._last_tick = now
+            within = lambda ts: ts if ts is not None and prev < ts <= now else now  # date events to when they happened
             for node in self.nodes.values():
                 sig = self._signature(node, now)
                 old = node.sig
                 node.sig = sig
                 if old is None:
                     continue
+                changed = within(node.behavior.get("rloc_ts")) if sig["rloc16"] != old["rloc16"] else now
                 if sig["role"] != old["role"]:
-                    self._log(node, now, "role", **{"from": old["role"], "to": sig["role"]})
+                    self._log(node, changed, "role", **{"from": old["role"], "to": sig["role"]})
                 hexed = lambda v: None if v is None else f"0x{v:04x}"
                 if sig["parent"] != old["parent"]:
                     params = {"from": old["parent"], "to": sig["parent"]}
                     if sig["rloc16"] != old["rloc16"]:  # an end device's short address follows its parent: one event
                         params.update(rloc16_from=hexed(old["rloc16"]), rloc16_to=hexed(sig["rloc16"]))
-                    self._log(node, now, "parent", **params)
+                    self._log(node, changed, "parent", **params)
                 elif sig["rloc16"] != old["rloc16"]:
-                    self._log(node, now, "rloc16", **{"from": hexed(old["rloc16"]), "to": hexed(sig["rloc16"])})
+                    self._log(node, changed, "rloc16", **{"from": hexed(old["rloc16"]), "to": hexed(sig["rloc16"])})
                 if sig["partition"] != old["partition"]:
                     self._log(node, now, "partition", **{"from": old["partition"], "to": sig["partition"]})
                 if sig["br"] != old["br"]:
                     self._log(node, now, "br_on" if sig["br"] else "br_off")
                 if sig["online"] != old["online"]:
-                    self._log(node, now, "online" if sig["online"] else "offline")
+                    alive = max(node.last_seen, node.last_diag)
+                    if sig["online"]:  # back with the frame (or answer) that brought it back
+                        self._log(node, within(alive), "online")
+                    else:  # offline since its silence passed the limit
+                        self._log(node, within(alive + self.offline_limit(node, sig["role"])), "offline")
             self._network_tick()
             self.capture.prune(now)
             for node in self.nodes.values():
@@ -722,8 +799,7 @@ class Engine:
         ts = self.clock
         parts = self.live_partitions()
         routers = sum(1 for n in self.nodes.values() if n.rloc16 is not None and A.is_router_rloc(n.rloc16)
-                      and self.role_of(n) in (ROLE_LEADER, ROLE_ROUTER) and presence(
-                          n.last_heard, n.last_seen, n.last_addressed, "router", ts, n.last_diag, self.diag_ttl)[0])
+                      and self.role_of(n) in (ROLE_LEADER, ROLE_ROUTER) and self.presence_of(n, "router", ts)[0])
         before = self._net_state.get("partitions")
         if before is not None and len(parts) != before:
             self._net_log(ts, "partitions", count=len(parts), ids=sorted(parts))
@@ -779,6 +855,7 @@ class Engine:
             self.link_metrics.clear()
             self.diag_ts = 0.0
             self.contexts.clear()
+            self.services.clear()
             self.leaders.clear()
             self.partition_seen.clear()
             self.primary_partition = None
@@ -850,6 +927,7 @@ class Engine:
                     "fixed_ml_prefix": self.fixed_ml_prefix,
                     "capture_stats": self.capture.to_json(),
                     "contexts": {str(k): v for k, v in self.contexts.items()},
+                    "services": {str(k): v for k, v in self.services.items()},
                     "diag_self": self.diag_self,
                 },
             }
@@ -894,6 +972,7 @@ class Engine:
             self.clock = meta.get("clock", 0.0)
             self.capture = NodeStats.from_json(meta.get("capture_stats"))
             self.contexts = {int(k): v for k, v in meta.get("contexts", {}).items()}
+            self.services = {int(k): v for k, v in meta.get("services", {}).items()}
             if self.diag_self is None:
                 self.diag_self = meta.get("diag_self")
             for node_id, idx, values in state.get("buckets", []):

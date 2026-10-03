@@ -7,16 +7,16 @@ import time
 
 from . import addresses as A
 from .engine import Engine, Node, ROLE_LEADER, ROLE_ROUTER, ROLE_UNKNOWN
-from .presence import presence
 
 # After this long without a frame that shows the MAC address, the device is identified only through its
 # short address: if that address was handed to another device unnoticed, the name could be on the wrong one.
 IDENTITY_VIA_RLOC_AFTER = 3600.0
+LINK_COST = {3: 1, 2: 2, 1: 4}  # Thread link cost per link quality (route cost = sum along the path)
 _TYPE_ORDER = {A.ML_EID: 0, A.OMR: 1, A.RLOC: 2, A.ALOC: 3, A.LINK_LOCAL: 4, A.UNCLASSIFIED: 5}
 
 
-def _online(n: Node, role: str, now: float, diag_ttl: float) -> dict:
-    online, indirect = presence(n.last_heard, n.last_seen, n.last_addressed, role, now, n.last_diag, diag_ttl)
+def _online(engine: Engine, n: Node, role: str, now: float) -> dict:
+    online, indirect = engine.presence_of(n, role, now)
     return {"online": online, "online_indirect": indirect}
 
 
@@ -33,6 +33,10 @@ def _node_addresses(engine: Engine, node: Node, role: str) -> list[dict]:
         put(str(A.rloc_address(prefix, node.rloc16)), A.RLOC, "derived", None)
         if role == ROLE_LEADER:
             put(str(A.rloc_address(prefix, 0xFC00)), A.ALOC, "derived", None)
+        for service in engine.services.get(node.rloc16, []):  # the servers of services answer their anycast address
+            put(str(A.rloc_address(prefix, 0xFC10 + (service["id"] & 0x0F))), A.ALOC, "derived", None)
+            if service["kind"] == "bbr":  # the primary backbone router
+                put(str(A.rloc_address(prefix, 0xFC38)), A.ALOC, "derived", None)
     for text, (_, last) in node.addresses.items():
         addr = A.parse_ip(text)
         if addr is not None:
@@ -67,7 +71,7 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
                 "name": engine.names.get(n.id),
                 "role": role, "border_router": n.border_router, "partition_id": pids[n.id],
                 "ftd": n.ftd, "rx_on_idle": n.rx_on_idle,
-                **_online(n, role, now, engine.diag_ttl),
+                **_online(engine, n, role, now),
                 "first_seen": n.first_seen, "last_seen": max(n.last_seen, n.last_diag),  # any sign of life, also the network's own
                 "last_addressed": n.last_addressed,
                 "heard": n.last_heard > 0, "last_heard": n.last_heard,
@@ -130,7 +134,7 @@ def _partition(engine: Engine, pid: int, members: list[dict], nodes: dict, links
             if m["lq_in"] <= 0 or m["lq_out"] <= 0:
                 continue  # a link needs both directions; 0 = not heard / route only
             lq = min(m["lq_in"], m["lq_out"])
-            w = 1 + (3 - lq) * 0.2
+            w = LINK_COST[lq]  # what Thread routes by: the cost of the weaker direction
             adjacency[a].append((b, w, lq))
             adjacency[b].append((a, w, lq))
     tree: dict[str, dict] = {root["id"]: root}

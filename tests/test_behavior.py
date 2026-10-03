@@ -35,8 +35,7 @@ class RhythmTests(unittest.TestCase):
             B.on_poll(b, 30.0 * i, never_down)
         self.assertIsNone(B.on_poll(b, 210.0 + 100, never_down))      # 100 s: less than 4 x 30 s
         self.assertEqual(B.on_poll(b, 310.0 + 400, never_down), {"seconds": 400, "usual": 30.0})
-        self.assertNotIn(400.0, b["intervals"])
-        self.assertEqual(B.usual_interval(b), 30.0)
+        self.assertEqual(B.usual_interval(b), 30.0)         # a single long one does not change the rhythm
 
     def test_short_rhythms_need_a_real_gap_too(self):
         b = {}

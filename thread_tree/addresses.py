@@ -42,7 +42,7 @@ def router_id(rloc16: int) -> int:
 
 
 def child_id(rloc16: int) -> int:
-    return rloc16 & 0x3FF
+    return rloc16 & 0x1FF  # 9 bits; bit 9 is reserved
 
 
 def is_valid_rloc16(rloc16: int) -> bool:

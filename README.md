@@ -261,7 +261,7 @@ users in the process list.
 | Shown | Source |
 |---|---|
 | Routers, leader, partition | MLE advertisements (Leader Data) |
-| Router links and quality | Route64 TLV; with active diagnostics both directions measured by the routers |
+| Router links and quality | Route64 TLV; with active diagnostics both directions measured by the routers; the tree follows Thread's route cost (link cost 1 / 2 / 4 for quality 3 / 2 / 1) |
 | Parent of an end device | its RLOC16 (`rloc16 >> 10` = parent router ID) |
 | Device type (FED / MED / SED) | Mode TLV; data polls mark sleepy devices |
 | Border routers | Network Data |
@@ -269,7 +269,11 @@ users in the process list.
 | Direct / indirect | whether the sniffer received a frame sent by the device itself |
 | Link-local, RLOC, ALOC | derived from MAC address, RLOC16 and mesh-local prefix |
 | ML-EID, OMR | address registrations and notifications; the routers' address lists |
-| Poll rhythm, parent searches, child timeout | MAC data requests, MLE Parent / Child ID Requests, Timeout TLV |
+| Poll rhythm, parent searches, child timeout | MAC data requests (the slow poll period, not the fast polls after sending), MLE Parent / Child ID Requests, Timeout TLV; CSL devices (Thread 1.2) are not judged by polls |
+| Router restarts | frame counter jumps, multicast MLE Link Request |
+| Service anycast addresses (ALOC fc10+, fc38) | Network Data services (active diagnostics) |
+| OMR addresses of sleepy devices | address registrations, expanded with the 6LoWPAN contexts of the Network Data |
+| Online / offline | own rhythm where known: routers after 10 advertisement intervals (at least 5 min), children after twice their child timeout; otherwise 15 min (routers) to 6 h (sleepy devices); while the sniffer hears nothing at all, nobody goes offline |
 | Thread version, manufacturer, link signal and loss | active diagnostics only |
 
 Limits of passive capture: only what the sniffer hears; sleepy devices appear slowly; a REED cannot be told from a FED;

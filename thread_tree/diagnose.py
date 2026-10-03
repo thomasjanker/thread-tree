@@ -192,13 +192,14 @@ def behavior_summary(engine: Engine, raw, now: float) -> dict | None:
     gaps = [ev["params"].get("seconds") or 0 for ev in day if ev["kind"] == "poll_gap"]
     searches = sum(1 for ev in day if ev["kind"] == "parent_search")
     usual = B.usual_interval(b)
-    if usual is None and not gaps and not searches and raw.child_timeout is None:
+    if usual is None and not gaps and not searches and raw.child_timeout is None and not b.get("csl"):
         return None
     alive = engine.last_frame_any is not None and now - engine.last_frame_any <= 2 * B.SNIFFER_OUTAGE
     return {"usual": usual, "timeout": raw.child_timeout, "last_poll": b.get("last_poll"), "gaps_24h": len(gaps),
             "longest_gap_24h": max(gaps) if gaps else None, "searches_24h": searches,
             "searching": bool(b.get("search")) and now - b["search"]["last"] <= B.SEARCH_EPISODE,
-            "silent": B.silence(b, engine.last_frame_any) if alive and not _is_router(raw) else None}
+            "silent": B.silence(b, engine.last_frame_any, raw.child_timeout) if alive and not _is_router(raw) else None,
+            "csl": b.get("csl") or None}
 
 
 def _is_router(raw) -> bool:
@@ -219,7 +220,7 @@ def _behavior_findings(engine: Engine, raw, now: float) -> list[dict]:
     if s["searches_24h"]:
         out.append(finding("parent_searches", "warn" if s["searches_24h"] >= SEARCHES_WARN else "info",
                            count=s["searches_24h"]))
-    if s["usual"] is not None and timeout and s["usual"] >= POLL_TIMEOUT_SHARE * timeout:
+    if s["usual"] is not None and timeout and s["usual"] >= POLL_TIMEOUT_SHARE * timeout and not s["csl"]:
         out.append(finding("poll_vs_timeout", "warn", usual=s["usual"], timeout=timeout))
     if s["silent"]:
         out.append(finding("silent_now", "warn", seconds=s["silent"]["seconds"], usual=s["silent"]["usual"],

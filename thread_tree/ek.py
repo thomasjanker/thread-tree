@@ -47,6 +47,8 @@ FIELDS: dict[str, list[str]] = {
     "mle_supervision": ["mle.tlv.supervision_interval", "mle.tlv.supervision"],
     "mle_link_margin": ["mle.tlv.link_margin"],
     "frame_counter": ["wpan.aux_sec.frame_counter"],
+    "csl_period": ["wpan.header_ie.csl.period"],  # CSL IE: the sender is a CSL receiver (Thread 1.2)
+    "csl_timeout": ["mle.tlv.csl_sychronized_timeout", "mle.tlv.csl_synchronized_timeout", "mle.tlv.csl_timeout"],
     "key_index": ["wpan.aux_sec.key_index"],
     "mode_ftd": ["mle.tlv.mode.device_type"],
     "mode_idle_rx": ["mle.tlv.mode.idle_rx"],
@@ -54,6 +56,8 @@ FIELDS: dict[str, list[str]] = {
     "reg_iid": ["mle.tlv.addr_reg_iid"],
     "reg_cid": ["mle.tlv.addr_reg_cid"],
     "nwd_prefix": ["thread_nwd.tlv.prefix"],
+    "nwd_prefix_len": ["thread_nwd.tlv.prefix.length"],
+    "nwd_context_id": ["thread_nwd.tlv.6co.context_id"],
     "nwd_br16": ["thread_nwd.tlv.border_router.16"],
     "nwd_hr16": ["thread_nwd.tlv.has_route.br_16"],
     "addr_target": ["thread_address.tlv.target_eid", "thread_address.target_eid"],
@@ -62,6 +66,7 @@ FIELDS: dict[str, list[str]] = {
 }
 
 # MLE command IDs (Thread spec 4.5)
+MLE_LINK_REQUEST = 0  # multicast after a router restarted
 MLE_ADVERTISEMENT = 4
 MLE_PARENT_REQUEST = 9  # a device looks for a parent
 MLE_DISCOVERY_REQUEST = 16  # a device looks for networks (before commissioning)
@@ -210,6 +215,9 @@ class Handler:
             e.on_data_request(ts, sender, dst16, dst_ext, sender_by_mac=ext is not None and src16 is None)
         e.on_ip(ts, sender, ip_src, self._one(layers, "ip_dst"))
 
+        csl = self._int(self._one(layers, "csl_period"))
+        if csl and sender is not None and not (sender.rloc16 is not None and A.is_router_rloc(sender.rloc16)):
+            e.on_csl(ts, sender, csl)
         counter = self._int(self._one(layers, "frame_counter"))
         if counter is not None:
             e.on_frame_counter(ts, sender, counter, self._int(self._one(layers, "key_index")))
@@ -245,6 +253,7 @@ class Handler:
                 self._last_nwd = raw
                 log.info("network data: prefixes=%s border_router.16=%s has_route.br_16=%s",
                          self._all(layers, "nwd_prefix"), list(raw[0]), list(raw[1]))
+            self._contexts(layers)
             brs = {self._int(v) for v in raw[0] + raw[1]}
             # the stable subset (sent to sleepy children) replaces every RLOC16 with 0xfffe
             complete = 0xFFFE not in brs
@@ -263,6 +272,8 @@ class Handler:
             if entries:
                 e.on_route64(ts, src16, entries)
 
+        if cmd == MLE_LINK_REQUEST and (self._one(layers, "ip_dst") or "").lower().startswith("ff02::2"):
+            e.on_router_restart(ts, sender)  # to all routers: a router that just restarted
         if cmd == MLE_PARENT_RESPONSE:
             dst64 = self._one(layers, "dst64")
             e.on_parent_response(ts, sender, A.normalize_ext(dst64) if dst64 else None,
@@ -291,6 +302,8 @@ class Handler:
             timeout = self._int(self._one(layers, "mle_timeout"))
             if timeout is not None and cmd in (MLE_CHILD_ID_REQUEST, 13):  # the child announces its timeout
                 e.on_child_timeout(ts, sender, timeout)
+            if self._present(layers, "csl_timeout"):
+                e.on_csl(ts, sender)
             supervision = self._int(self._one(layers, "mle_supervision"))
             if supervision is not None:
                 e.on_supervision_interval(ts, sender, supervision)
@@ -299,15 +312,34 @@ class Handler:
             if ftd is not None and idle is not None:
                 e.on_mode(ts, sender, ftd, idle)
             addrs = self._all(layers, "reg_ipv6")
-            ml = e.ml_prefix
-            if ml is not None:  # context 0 is the mesh-local prefix
-                for iid_hex, cid in zip(self._all(layers, "reg_iid"), self._all(layers, "reg_cid")):
-                    try:
-                        if int(cid, 0) == 0:
-                            addrs.append(str(A.addr_from(ml, int(iid_hex.replace(":", ""), 16))))
-                    except ValueError:
-                        pass
+            # compressed entries: context 0 is the mesh-local prefix, the others come from the Network Data (OMR)
+            for iid_hex, cid in zip(self._all(layers, "reg_iid"), self._all(layers, "reg_cid")):
+                try:
+                    cid_n = int(cid, 0)
+                    prefix = e.ml_prefix if cid_n == 0 else e.contexts.get(cid_n)
+                    if prefix is not None:
+                        addrs.append(str(A.addr_from(prefix, int(iid_hex.replace(":", ""), 16))))
+                except ValueError:
+                    pass
             e.on_registered_addresses(ts, sender, addrs)
+
+    def _contexts(self, layers: dict) -> None:
+        """6LoWPAN contexts of the Network Data (the context ids devices use to compress their OMR addresses).
+        A context is a sub-TLV of its /64 prefix; the flat field lists only line up if every /64 prefix has one."""
+        prefixes, lengths = self._all(layers, "nwd_prefix"), self._all(layers, "nwd_prefix_len")
+        cids = [self._int(c) for c in self._all(layers, "nwd_context_id")]
+        if not cids or len(prefixes) != len(lengths) or None in cids:
+            return
+        wide = [p for p, n in zip(prefixes, lengths) if self._int(n) == 64]
+        if len(wide) != len(cids):
+            return  # cannot tell which prefix a context belongs to: rather none than a wrong one
+        contexts = {}
+        for text, cid in zip(wide, cids):
+            addr = A.parse_ip(text if "::" in text or text.count(":") == 7 else text + "::")
+            if addr is not None:
+                contexts[cid] = A.prefix64(addr)
+        if contexts:
+            self.engine.on_contexts(contexts)
 
     def _route_entries(self, layers: dict, mask_text: str) -> list[tuple[int, int, int, int]]:
         try:

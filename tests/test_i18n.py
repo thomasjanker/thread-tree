@@ -61,3 +61,16 @@ class I18nTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AbbreviationTests(unittest.TestCase):
+    def test_every_abbreviation_in_the_texts_is_explained_in_the_legend(self):
+        """The UI promises a legend entry for every abbreviation it uses."""
+        not_abbreviations = {"IKEA", "OK", "README", "DIRIGERA"}
+        for lang, d in (("en", EN), ("de", DE)):
+            used = set()
+            for key, value in d.items():
+                if isinstance(value, str):
+                    used |= set(re.findall(r"\b([A-Z][A-Z0-9]{1,5}(?:-[A-Z0-9]{2,})?)\b", value))
+            missing = sorted(used - set(d["abbr"]) - not_abbreviations)
+            self.assertEqual(missing, [], lang)

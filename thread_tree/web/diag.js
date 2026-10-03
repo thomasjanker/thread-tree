@@ -364,6 +364,7 @@ function behaviorSection(d) {
   const polls = { ...d.series, frames: d.series.polls, retries: d.series.polls.map(() => 0) };
   return section('diag.sec.behavior',
     b.searching ? h('p', {}, h('span', { class: 'tag reach-indirect' }, t('diag.b.searching'))) : null,
+    b.csl ? h('p', {}, h('span', { class: 'tag', title: t('legend.csl') }, 'CSL'), ' ', t('diag.b.csl')) : null,
     h('div', { class: 'tiles' },
       tile(t('diag.b.usual'), fmtDuration(b.usual), t('diag.b.usual.tip')),
       tile(t('diag.b.timeout'), fmtDuration(b.timeout), t('diag.b.timeout.tip')),

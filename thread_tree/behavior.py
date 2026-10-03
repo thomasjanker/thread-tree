@@ -10,7 +10,6 @@ note, not a warning.
 
 from __future__ import annotations
 
-from statistics import median
 
 INTERVALS_KEPT = 30          # recent poll intervals that define the usual rhythm
 INTERVALS_NEEDED = 5         # ... and how many it takes before gaps are judged
@@ -24,30 +23,42 @@ OUTAGES_KEPT = 200
 
 
 def usual_interval(behavior: dict) -> float | None:
-    intervals = behavior.get("intervals") or []
-    return median(intervals) if len(intervals) >= INTERVALS_NEEDED else None
+    """The device's long poll period, not the median of its intervals. Sleepy devices poll fast for a while after
+    sending and slowly otherwise; the slow period is the one a gap is judged against."""
+    intervals = sorted(behavior.get("intervals") or [])
+    if len(intervals) < INTERVALS_NEEDED:
+        return None
+    slow = [x for x in intervals if x >= 0.5 * intervals[-1]]
+    if len(slow) >= 3:  # the slow polls between the bursts, however many fast ones there are
+        return slow[len(slow) // 2]
+    return intervals[int(0.8 * (len(intervals) - 1))]  # else the 80th percentile: a single long one does not dominate
 
 
-def gap_threshold(usual: float) -> float:
-    return max(GAP_FACTOR * usual, usual + GAP_MIN_EXTRA)
+def gap_threshold(usual: float, timeout: int | None = None) -> float:
+    """Silence that counts as a gap: several long poll periods, but never more than the child timeout (beyond it
+    the parent drops the device anyway)."""
+    threshold = max(GAP_FACTOR * usual, usual + GAP_MIN_EXTRA)
+    return min(threshold, float(timeout)) if timeout and timeout > usual else threshold
 
 
-def on_poll(behavior: dict, ts: float, sniffer_was_down) -> dict | None:
-    """A data poll (not a retransmission). Returns the gap that just ended, if this poll ended one."""
+def on_poll(behavior: dict, ts: float, sniffer_was_down, timeout: int | None = None) -> dict | None:
+    """A data poll (not a retransmission). Returns the gap that just ended, if this poll ended one. A CSL device
+    (Thread 1.2 synchronized sleepy end device) does not poll in a rhythm: its gaps mean nothing."""
     last = behavior.get("last_poll")
     behavior["last_poll"] = max(ts, last or 0.0)
     if last is None or ts <= last:
         return None
     interval = ts - last
     usual = usual_interval(behavior)
-    if usual is not None and interval >= gap_threshold(usual):
-        if sniffer_was_down(last, ts):
-            return None  # the sniffer heard nothing at all for a while: no evidence against the device
-        return {"seconds": round(interval), "usual": round(usual, 1)}
-    if INTERVAL_MIN <= interval <= INTERVAL_MAX:
+    down = sniffer_was_down(last, ts)
+    # every plausible interval shapes the rhythm, also one that looked like a gap: if it recurs it is the slow poll
+    # period (a single one does not move the estimate); beyond the child timeout it is a breach, never the rhythm
+    if INTERVAL_MIN <= interval <= INTERVAL_MAX and (not timeout or interval <= timeout) and not down:
         intervals = behavior.setdefault("intervals", [])
         intervals.append(round(interval, 2))
         del intervals[:-INTERVALS_KEPT]
+    if usual is not None and interval >= gap_threshold(usual, timeout) and not behavior.get("csl") and not down:
+        return {"seconds": round(interval), "usual": round(usual, 1)}
     return None
 
 
@@ -70,19 +81,20 @@ def on_attach_request(behavior: dict, ts: float) -> dict | None:
     return {"seconds": round(max(0.0, ts - search["start"])), "requests": search["count"]}
 
 
-def silence(behavior: dict, last_frame: float | None) -> dict | None:
+def silence(behavior: dict, last_frame: float | None, timeout: int | None = None) -> dict | None:
     """The device has not polled for longer than a gap, while the sniffer still hears others (last_frame)."""
     usual, last = usual_interval(behavior), behavior.get("last_poll")
-    if usual is None or last is None or last_frame is None:
+    if usual is None or last is None or last_frame is None or behavior.get("csl"):
         return None
     quiet = last_frame - last
-    return {"seconds": round(quiet), "usual": round(usual, 1)} if quiet >= gap_threshold(usual) else None
+    return {"seconds": round(quiet), "usual": round(usual, 1)} if quiet >= gap_threshold(usual, timeout) else None
 
 
 # ---- checks against the standard (all from the sniffer) --------------------------------------------------------
 
 MARGIN_SLACK = 10            # dB: a parent this much worse than the best offer is a poor choice
-ATTACH_ANSWER = 5.0          # s: a Child ID Request without a Child ID Response within this time was not answered
+ATTACH_ANSWER = 5.0          # s: a Child ID Request without a Child ID Response within this time was not answered ...
+ATTACH_RETRY = 60.0          # ... if the device asks again within this time (later, the sniffer may just have missed it)
 COUNTER_AHEAD = 1000         # OpenThread stores the frame counter this far ahead: a restart skips forward by up to that
 COUNTER_JUMP_WITHIN = 120.0  # s: ... so a skip of that size in a short time means a restart
 ADV_GAP = 100.0              # s without an advertisement of a router (Trickle sends at least every 32 s) ...
