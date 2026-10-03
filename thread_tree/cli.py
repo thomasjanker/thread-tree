@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 from .capture import DEFAULT_EXTCAP_SCRIPT
@@ -40,12 +41,70 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("demo", parents=[common], help="serve a simulated network (no hardware)")
     dec = sub.add_parser("dataset", help="decode a dataset and print what it contains (no secrets)")
     dec.add_argument("tlvs", nargs="?", help="hex; default: env THREAD_TREE_DATASET")
+    probe = sub.add_parser("diag-probe", help="test an nRF52840 with OpenThread CLI firmware as diagnostic node")
+    probe.add_argument("--port", help="serial device, best /dev/serial/by-id/usb-... (see --list-ports)")
+    probe.add_argument("--list-ports", action="store_true", help="show serial devices and exit")
+    probe.add_argument("--db", default="thread-tree.sqlite",
+                       help="database whose <db>.dataset file holds the dataset to join with")
+    probe.add_argument("--dataset-file", help="file with the dataset hex (default: <db>.dataset or env THREAD_TREE_DATASET)")
+    probe.add_argument("--no-join", action="store_true", help="do not (re)join: probe a node that is already attached")
+    probe.add_argument("--stop", action="store_true", help="stop the Thread stack on the node afterwards")
+    probe.add_argument("--out", help="transcript file (default: diag-probe-<time>.txt)")
     return p
+
+
+def _diag_probe(args: argparse.Namespace) -> int:
+    from .diagprobe import list_ports, run_probe
+    from .otcli import OtCli
+
+    if args.list_ports:
+        rows = list_ports()
+        for by_id, tty in rows:
+            print(f"{by_id} -> {tty}")
+        if not rows:
+            print("no serial devices found")
+        return 0
+    if not args.port:
+        print("--port is required (see --list-ports)", file=sys.stderr)
+        return 2
+    dataset_hex = None
+    if not args.no_join:
+        path = Path(args.dataset_file or args.db + ".dataset")
+        raw = os.environ.get("THREAD_TREE_DATASET") or (path.read_text().strip() if path.is_file() else None)
+        if not raw:
+            print(f"no dataset: enter it in the UI first ({path} is missing) or set THREAD_TREE_DATASET",
+                  file=sys.stderr)
+            return 2
+        try:
+            parse_dataset(raw)
+        except ValueError as exc:
+            print(f"invalid dataset: {exc}", file=sys.stderr)
+            return 2
+        dataset_hex = "".join(raw.split()).lower()
+    out = Path(args.out or time.strftime("diag-probe-%Y%m%d-%H%M%S.txt"))
+    try:
+        cli = OtCli(args.port).open()
+    except OSError as exc:
+        print(f"cannot open {args.port}: {exc}", file=sys.stderr)
+        return 2
+    fd = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as sink, cli:
+        def emit(text: str) -> None:
+            print(text)
+            sink.write(text + "\n")
+            sink.flush()
+
+        summary = run_probe(cli, dataset_hex, join=not args.no_join, emit=emit, stop_after=args.stop)
+    print(f"\nTranscript written to {out} (it contains no network key).")
+    return 0 if summary["joined"] else 1
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+
+    if args.cmd == "diag-probe":
+        return _diag_probe(args)
 
     if args.cmd == "dataset":
         try:

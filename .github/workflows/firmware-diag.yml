@@ -1,0 +1,65 @@
+name: Firmware (nRF52840 diagnostic node)
+
+# Builds OpenThread's ot-cli-ftd for the nRF52840 USB dongle WITH the diagnostic commands
+# (meshdiag, networkdiagnostic) that the stock builds leave out: OpenThread enables both only on
+# border routers. No local toolchain needed: run it from the Actions tab, download the artifact.
+# The USB layout (-DOT_BOOTLOADER=USB) fits the dongle's built-in Nordic bootloader, like the
+# community builds (ArthFink/nrf52840-OpenThread) it is modelled on.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ot_nrf528xx_ref:
+        description: "openthread/ot-nrf528xx branch, tag or commit"
+        default: main
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out ot-nrf528xx (with the OpenThread submodule)
+        uses: actions/checkout@v4
+        with:
+          repository: openthread/ot-nrf528xx
+          ref: ${{ inputs.ot_nrf528xx_ref }}
+          submodules: recursive
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-none-eabi libstdc++-arm-none-eabi-newlib cmake ninja-build python3
+
+      - name: Bootstrap
+        run: ./script/bootstrap
+
+      - name: Build ot-cli-ftd with diagnostics
+        run: ./script/build nrf52840 USB_trans -DOT_BOOTLOADER=USB -DOT_MESH_DIAG=ON -DOT_NETDIAG_CLIENT=ON
+
+      - name: Convert to hex and verify the commands are in the binary
+        run: |
+          cd build/bin
+          cp ot-cli-ftd ot-cli-ftd-diag-USB
+          arm-none-eabi-objcopy -O ihex ot-cli-ftd-diag-USB ot-cli-ftd-diag-USB.hex
+          for word in meshdiag networkdiagnostic routereligible; do
+            grep -aq "$word" ot-cli-ftd-diag-USB || { echo "::error::'$word' is missing in the binary"; exit 1; }
+          done
+          {
+            echo "ot-nrf528xx: $(git -C ../.. rev-parse HEAD)"
+            echo "openthread:  $(git -C ../../openthread rev-parse HEAD)"
+            echo "built:       $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "flags:       USB_trans -DOT_BOOTLOADER=USB -DOT_MESH_DIAG=ON -DOT_NETDIAG_CLIENT=ON"
+          } | tee BUILD-INFO.txt
+          sha256sum ot-cli-ftd-diag-USB.hex | tee SHA256SUMS
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: ot-cli-ftd-diag-USB
+          path: |
+            build/bin/ot-cli-ftd-diag-USB.hex
+            build/bin/ot-cli-ftd-diag-USB
+            build/bin/BUILD-INFO.txt
+            build/bin/SHA256SUMS

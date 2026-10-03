@@ -92,6 +92,12 @@ so nodes, roles and addresses survive restarts (nodes unseen for 30 days are pru
 Limits: only what the sniffer hears; sleepy devices appear slowly; a REED cannot be told from a FED;
 router-to-router links need that router's advertisement to reach the sniffer.
 
+## Active diagnostics (in progress)
+
+A second nRF52840 with OpenThread CLI firmware can join as end device and ask the network directly (routers, children
+with MAC and IPv6 addresses, vendor/model). Plan, firmware build (GitHub Actions, no local toolchain) and the
+Phase 0 test tool (`python3 -m thread_tree diag-probe`): [docs/diagnostics.md](docs/diagnostics.md).
+
 ## Limits of passive capture
 
 - **Same router ID in two partitions at once.** While a network re-forms (e.g. a border router restarts), two partitions
