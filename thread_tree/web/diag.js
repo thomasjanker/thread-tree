@@ -23,7 +23,9 @@ function paramText(key, value) {
   if (key === 'rate') return fmtPct(value);
   if (key === 'msg_rate') return fmtPct(value, 1);
   if (key === 'rssi') return fmtDbm(value);
-  if (['mean', 'seconds', 'age', 'timeout', 'longest', 'usual'].includes(key)) return fmtDuration(value);
+  if (['mean', 'seconds', 'age', 'timeout', 'longest', 'usual', 'interval'].includes(key)) return fmtDuration(value);
+  if (key === 'chosen' || key === 'best') return routerLabel(value);
+  if (key.endsWith('_margin')) return `${value} dB`;
   return String(value);
 }
 
@@ -33,6 +35,29 @@ function findingText(f) {
     text: fillTemplate(t(`finding.${f.code}.text`), f.params, paramText),
     hint: fillTemplate(t(`finding.${f.code}.hint`), f.params, paramText),
   };
+}
+
+// events of the standard checks and of the network as a whole
+function specialEventText(kind, p) {
+  const tpl = (key, params) => fillTemplate(t(key), params, (k, v) => v);
+  const r = v => (v === null || v === undefined ? '–' : routerLabel(v));
+  const pid = v => (v === null || v === undefined ? '–' : `0x${Number(v).toString(16)}`);
+  const devs = ids => (ids || []).map(id => (state.topo?.nodes[id] ? nodeName(state.topo.nodes[id]) : id)).join(', ') || '–';
+  switch (kind) {
+    case 'parent_choice': return tpl('event.parent_choice', { chosen: r(p.chosen), best: r(p.best), cm: p.chosen_margin, bm: p.best_margin });
+    case 'reboot': return tpl(p.how === 'reset' ? 'event.reboot.reset' : 'event.reboot.skip', { a: p.from, b: p.to });
+    case 'supervision_gap': return tpl('event.supervision_gap', { parent: r(p.parent), seconds: fmtDuration(p.seconds), interval: fmtDuration(p.interval) });
+    case 'netdata_lag': return tpl('event.netdata_lag', { seconds: fmtDuration(p.seconds), version: p.version, current: p.current });
+    case 'adv_gap': return tpl('event.adv_gap', { seconds: fmtDuration(p.seconds) });
+    case 'attach_unanswered': return tpl('event.attach_unanswered', { router: r(p.router) });
+    case 'leader_change': return tpl('event.leader_change', { partition: pid(p.partition), a: r(p.from), b: r(p.to) });
+    case 'partition_new': return tpl('event.partition_new', { partition: pid(p.partition), leader: r(p.leader) });
+    case 'partitions': return p.count > 1 ? tpl('event.partitions.split', { n: p.count }) : t('event.partitions.merged');
+    case 'br_change': return tpl('event.br_change', { added: devs(p.added), removed: devs(p.removed) });
+    case 'routers': return tpl('event.routers', { a: p.before, b: p.count });
+    case 'netdata_version': return tpl('event.netdata_version', { version: p.version, partition: pid(p.partition) });
+    default: return null;
+  }
 }
 
 function eventText(ev) {
@@ -49,6 +74,8 @@ function eventText(ev) {
     : fillTemplate(t('event.parent_search.attached'), { router: routerLabel(p.parent) }, (k, v) => v));
   if (ev.kind === 'attached') return fillTemplate(t('event.attached'),
     { to: p.to === null || p.to === undefined ? '–' : routerLabel(p.to), seconds: fmtDuration(p.seconds), requests: p.requests }, (k, v) => v);
+  const special = specialEventText(ev.kind, p);
+  if (special !== null) return special;
   if (ev.kind === 'first_seen') params.how = t('how.' + p.how);
   else if (ev.kind === 'mac_learned') params.rloc16 = p.rloc16;
   else if ('from' in p) { params.from = value(ev.kind, p.from); params.to = value(ev.kind, p.to); }

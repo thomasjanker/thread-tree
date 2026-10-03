@@ -43,6 +43,9 @@ ACTIVE_STALE = 3600.0        # active measurements older than this say nothing a
 POLL_GAPS_WARN = 3           # gaps in the poll rhythm in 24 h (one longer than the child timeout warns at once)
 SEARCHES_WARN = 3            # parent searches in 24 h
 POLL_TIMEOUT_SHARE = 0.9     # usual poll interval this close to the child timeout: no room for a single lost poll
+ADV_GAPS_WARN = 3            # advertisement gaps of a router in 24 h
+BUSY_POLLS_HOUR = 360        # a sleepy device polling more than every 10 s ...
+BUSY_FACTOR = 3.0            # ... and 3 times as often as the typical sleepy device
 
 
 # Every code a finding can have; the UI needs a title, a text and a hint for each (tested in both languages).
@@ -53,6 +56,7 @@ FINDING_CODES = (
     "router_near_limit", "leader_changes", "many_offline",
     "link_lossy", "child_link_poor", "child_age_high", "router_no_detail", "indirect_confirmed", "diag_failing",
     "poll_gaps", "parent_searches", "poll_vs_timeout", "silent_now",
+    "parent_choice", "reboots", "supervision_missed", "netdata_lag", "adv_gaps", "attach_rejected", "busy_sleepy",
 )
 
 
@@ -223,6 +227,44 @@ def _behavior_findings(engine: Engine, raw, now: float) -> list[dict]:
     return out
 
 
+def _day(raw, kind: str, now: float) -> list[dict]:
+    return [ev["params"] for ev in (raw.events if raw is not None else []) if ev["kind"] == kind and ev["ts"] >= now - DAY]
+
+
+def _standard_findings(engine: Engine, n: dict, raw, now: float, sleepy_median: float | None) -> list[dict]:
+    """Checks against the Thread standard, from what the sniffer recorded (events of the last 24 hours)."""
+    out: list[dict] = []
+    choices = _day(raw, "parent_choice", now)
+    if choices:
+        c = choices[-1]
+        out.append(finding("parent_choice", "warn", count=len(choices), chosen=c["chosen"], best=c["best"],
+                           chosen_margin=c["chosen_margin"], best_margin=c["best_margin"]))
+    reboots = _day(raw, "reboot", now)
+    if reboots:
+        out.append(finding("reboots", "warn", count=len(reboots)))
+    gaps = _day(raw, "supervision_gap", now)
+    if gaps:
+        out.append(finding("supervision_missed", "warn", count=len(gaps), longest=max(g["seconds"] for g in gaps),
+                           interval=gaps[-1]["interval"]))
+    lags = _day(raw, "netdata_lag", now)
+    if lags:
+        out.append(finding("netdata_lag", "warn", count=len(lags), version=lags[-1]["version"], current=lags[-1]["current"]))
+    advs = _day(raw, "adv_gap", now)
+    if advs:
+        out.append(finding("adv_gaps", "warn" if len(advs) >= ADV_GAPS_WARN else "info", count=len(advs),
+                           longest=max(a["seconds"] for a in advs)))
+    if n["role"] in ("leader", "router") and n["router_id"] is not None:
+        rejected = sum(1 for other in engine.nodes.values() for p in _day(other, "attach_unanswered", now)
+                       if p.get("router") == n["router_id"])
+        if rejected:
+            out.append(finding("attach_rejected", "warn", count=rejected))
+    if n["role"] == "sed" and raw is not None and sleepy_median:
+        per_hour = raw.stats.window(now, 6)["polls"]
+        if per_hour >= BUSY_POLLS_HOUR and per_hour >= BUSY_FACTOR * sleepy_median:
+            out.append(finding("busy_sleepy", "info", per_hour=per_hour, median=round(sleepy_median)))
+    return out
+
+
 def _recent(events: list[dict], kinds: tuple[str, ...], now: float, both_known: bool = False) -> int:
     count = 0
     for ev in events:
@@ -235,7 +277,7 @@ def _recent(events: list[dict], kinds: tuple[str, ...], now: float, both_known: 
 
 
 def _node_findings(engine: Engine, nodes: dict, nid: str, now: float, graph: dict | None,
-                   crit: dict, children_of: dict[str, int]) -> list[dict]:
+                   crit: dict, children_of: dict[str, int], sleepy_median: float | None = None) -> list[dict]:
     n = nodes[nid]
     raw = engine.nodes.get(nid)
     out: list[dict] = []
@@ -299,6 +341,7 @@ def _node_findings(engine: Engine, nodes: dict, nid: str, now: float, graph: dic
         if w["rssi_n"] >= RSSI_MIN_SAMPLES and w["rssi_avg"] < RSSI_WEAK:
             out.append(finding("signal_weak", "info", rssi=w["rssi_avg"], samples=w["rssi_n"]))
     out.extend(_behavior_findings(engine, raw, now))
+    out.extend(_standard_findings(engine, n, raw, now, sleepy_median))
     if not n["heard"] and not n.get("placeholder"):
         if _fresh(n.get("last_diag"), now, _ttl(engine)):  # the network itself vouches for it
             out.append(finding("indirect_confirmed", "info", since=n["last_diag"]))
@@ -381,10 +424,12 @@ def analyze(engine: Engine, snap: dict, now: float, capture: dict | None = None)
         for pid, g in graphs.items():
             crit.update(critical_routers(g, leaders.get(pid), children_of))
 
+        polls = sorted(engine.nodes[nid].stats.window(now, 6)["polls"] for nid, n in real.items() if n["role"] == "sed")
+        sleepy_median = polls[len(polls) // 2] if polls else None
         per_node = {}
         for nid in real:
             graph = graphs.get(real[nid]["partition_id"])
-            findings = _node_findings(engine, real, nid, now, graph, crit, children_of)
+            findings = _node_findings(engine, real, nid, now, graph, crit, children_of, sleepy_median)
             st = engine.nodes[nid].stats
             w24, w1 = st.window(now, 144), st.window(now, 6)
             per_node[nid] = {

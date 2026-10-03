@@ -229,6 +229,23 @@ def seed_history(engine: Engine, now: float, hours: int = 24, seed: int = 7) -> 
         window = engine.nodes.get(OLD_CHILD)
         if window is not None:  # a sleepy device that went quiet for longer than its child timeout
             engine._log(window, now - 3 * 3600, "poll_gap", seconds=420, usual=4.0, timeout=240)
+            engine._log(window, now - 3 * 3600 + 30, "supervision_gap", parent=9, seconds=410, interval=129)
+        # what the checks against the standard found in the past day
+        door = engine.nodes.get("a4c138fffe100002")
+        if door is not None:
+            engine._log(door, now - 5.5 * 3600, "reboot", how="skip", **{"from": 18200, "to": 19180})
+        if flapper is not None:
+            engine._log(flapper, now - 2 * 1800 - 5, "parent_choice", chosen=17, best=9, chosen_margin=12, best_margin=28)
+            engine._log(flapper, now - 4 * 1800 - 20, "attach_unanswered", router=17)
+        if weak_router is not None:
+            for hours in (5.9, 5.6, 5.3):  # before its outage
+                engine._log(weak_router, now - hours * 3600, "adv_gap", seconds=140)
+        garden = engine.nodes.get("c8d1d1fffe000016")
+        if garden is not None:
+            engine._log(garden, now - 6 * 3600 + 200, "netdata_lag", version=6, current=7, seconds=150)
+        engine._net_log(now - 6 * 3600, "netdata_version", partition=0x1A2B3C4D, version=7)
+        engine._net_log(now - 5.0 * 3600, "routers", count=4, before=5)
+        engine._net_log(now - 4.8 * 3600, "routers", count=5, before=4)
         for node in engine.nodes.values():
             node.events.sort(key=lambda e: e["ts"])
 

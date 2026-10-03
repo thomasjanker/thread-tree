@@ -9,7 +9,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
-from .engine import EVENTS_PER_NODE, Engine
+from .engine import EVENTS_PER_NODE, NETWORK_EVENTS, NETWORK_ID, Engine
 from .stats import BUCKET_FIELDS, BUCKET_KEEP, BUCKET_SECONDS
 
 SCHEMA_VERSION = 3
@@ -121,7 +121,7 @@ class Store:
                            [(node_id, ts, kind, json.dumps(params)) for node_id, ts, kind, params in
                             state.get("events_new", [])])
             db.execute("DELETE FROM node_buckets WHERE node_id NOT IN (SELECT id FROM nodes) AND node_id != '_capture'")
-            db.execute("DELETE FROM events WHERE node_id NOT IN (SELECT id FROM nodes)")
+            db.execute("DELETE FROM events WHERE node_id NOT IN (SELECT id FROM nodes) AND node_id != ?", (NETWORK_ID,))
 
     def maintain(self, now: float) -> None:
         """Drop statistics and events beyond their retention."""
@@ -130,7 +130,8 @@ class Store:
             db.execute("DELETE FROM events WHERE ts < ?", (now - EVENT_RETENTION,))
             db.execute("""DELETE FROM events WHERE id IN (SELECT id FROM (
                               SELECT id, ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY ts DESC, id DESC) AS rn
-                              FROM events) WHERE rn > ?)""", (EVENTS_PER_NODE,))
+                              FROM events) WHERE rn > CASE node_id WHEN ? THEN ? ELSE ? END)""",
+                       (NETWORK_ID, NETWORK_EVENTS, EVENTS_PER_NODE))
 
     def load(self) -> dict:
         with self._db() as db:

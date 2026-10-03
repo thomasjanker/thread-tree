@@ -25,6 +25,8 @@ MAX_NAME = 64
 EVENTS_PER_NODE = 200
 CHILD_TIMEOUT_DEFAULT = 240.0  # a child in a parent's table was heard within its timeout (this is the usual value)
 CAPTURE_ID = "_capture"  # statistics of the whole capture are stored like a node, under this id
+NETWORK_ID = "_network"  # events of the network as a whole (leader, partitions, border routers) are stored under this id
+NETWORK_EVENTS = 1000
 # Freshness, measured on the capture's own clock (latest observed timestamp), so a paused capture or a
 # replayed pcap keeps its last known state. Routers advertise at least every 32 s (MLE trickle).
 PARTITION_TTL = 180.0  # a partition without leader data for this long is gone (network re-formed)
@@ -99,6 +101,9 @@ class Engine:
         self.capture = NodeStats()  # all frames heard, including those without transmitter address (ACKs)
         self.last_frame_any: float | None = None  # last frame the sniffer received (not persisted)
         self.data_versions: dict[int, int] = {}  # partition id -> latest advertised Network Data version (not persisted)
+        self.data_version_ts: dict[int, float] = {}  # ... and when it appeared
+        self.net_events: list[dict] = []  # events of the network as a whole, oldest first
+        self._net_state: dict = {}  # what the network looked like at the last check (to log changes; not persisted)
         self.demo_outage: tuple | None = None  # demo only: (router id, since) switched off by an outage test
         self.sniffer_outages: list[tuple[float, float]] = []  # periods without any frame: the sniffer was deaf
         self.pending_events: list[tuple[str, dict]] = []  # not yet saved
@@ -153,6 +158,13 @@ class Engine:
         if node.rloc16 is not None:
             return None if A.is_router_rloc(node.rloc16) else A.router_id(node.rloc16)
         return A.router_id(node.parent_hint) if node.parent_hint is not None else None
+
+    def _net_log(self, ts: float, kind: str, **params) -> None:
+        event = {"ts": ts, "kind": kind, "params": params}
+        self.net_events.append(event)
+        del self.net_events[:-NETWORK_EVENTS]
+        self.pending_events.append((NETWORK_ID, event))
+        self.dirty = True
 
     def _log(self, node: Node, ts: float, kind: str, **params) -> None:
         event = {"ts": ts, "kind": kind, "params": params}
@@ -277,6 +289,9 @@ class Engine:
             node.stats.record_addressed(ts, length)
             if ts > node.last_addressed:
                 node.last_addressed = ts
+            gap = B.on_addressed(node.behavior, ts, self.sniffer_was_down)
+            if gap:  # its parent did not contact it within its supervision interval
+                self._log(node, ts, "supervision_gap", parent=self.parent_router_id(node), **gap)
 
     def record_frame(self, ts: float, node: Node | None, kind: str, length: int | None = None,
                      rssi: float | None = None, lqi: float | None = None, seq: int | None = None,
@@ -292,6 +307,10 @@ class Engine:
                 gap = B.on_poll(node.behavior, ts, self.sniffer_was_down)
                 if gap:
                     self._log(node, ts, "poll_gap", timeout=node.child_timeout, **gap)
+            elif kind == "adv" and not retry:
+                gap = B.on_advertisement(node.behavior, ts, self.sniffer_was_down)
+                if gap:
+                    self._log(node, ts, "adv_gap", **gap)
         self.capture.record_frame(ts, kind, length, rssi, lqi)
         self.clock = max(self.clock, ts)
         self.dirty = True
@@ -299,8 +318,23 @@ class Engine:
     def sniffer_was_down(self, start: float, end: float) -> bool:
         return any(s < end and e > start for s, e in self.sniffer_outages)
 
+    def _unanswered(self, ts: float, node: Node) -> None:
+        """A Child ID Request that got no Child ID Response: the router did not accept the device (full child
+        table, or the frames got lost)."""
+        pending = node.behavior.pop("attach", None)
+        if pending and ts - pending["ts"] >= B.ATTACH_ANSWER:
+            self._log(node, ts, "attach_unanswered", router=pending["router"])
+
+    def on_parent_response(self, ts: float, router: Node | None, child_ext: str | None, margin: int | None) -> None:
+        """MLE Parent Response: a router offers itself to the searching device (with the link margin it measured)."""
+        child = self.nodes.get(child_ext or "")
+        if child is not None and router is not None and router.rloc16 is not None and A.is_router_rloc(router.rloc16):
+            B.on_parent_response(child.behavior, A.router_id(router.rloc16), margin)
+
     def on_parent_request(self, ts: float, node: Node | None) -> None:
         """MLE Parent Request: the device looks for a parent. If it has one, it has lost the link to it."""
+        if node is not None:
+            self._unanswered(ts, node)
         if node is not None and B.on_parent_request(node.behavior, ts):
             self._log(node, ts, "parent_search", parent=self.parent_router_id(node))
             self.dirty = True
@@ -309,17 +343,35 @@ class Engine:
         """MLE Child ID Request: the device chose a parent (the destination); ends a search."""
         if node is None:
             return
+        self._unanswered(ts, node)
+        to = A.router_id(parent.rloc16) if parent is not None and parent.rloc16 is not None else None
+        choice = B.judge_choice(node.behavior.get("search"), to)
         done = B.on_attach_request(node.behavior, ts)
+        if choice:
+            self._log(node, ts, "parent_choice", **choice)
         if done:
-            to = A.router_id(parent.rloc16) if parent is not None and parent.rloc16 is not None else None
             self._log(node, ts, "attached", to=to, **done)
             self.dirty = True
+        if to is not None:
+            node.behavior["attach"] = {"router": to, "ts": ts}
 
     def on_discovery_request(self, ts: float, node: Node | None) -> None:
         """MLE Discovery Request: a device looks for Thread networks, typically a new one before commissioning."""
         if node is not None:
             self._log(node, ts, "discovery")
             self.dirty = True
+
+    def on_frame_counter(self, ts: float, node: Node | None, counter: int, key: int | None) -> None:
+        """MAC frame counter of a secured frame: it only grows, so a jump back (or far ahead) means a restart."""
+        if node is not None:
+            restart = B.on_frame_counter(node.behavior, ts, counter, key)
+            if restart:
+                self._log(node, ts, "reboot", **restart)
+
+    def on_supervision_interval(self, ts: float, node: Node | None, seconds: int) -> None:
+        """Supervision Interval TLV of a child (Thread 1.2): its parent must contact it at least this often."""
+        if node is not None and seconds > 0:
+            node.behavior["supervision"] = seconds
 
     def on_child_timeout(self, ts: float, node: Node | None, seconds: int) -> None:
         if node is not None and 0 < seconds and node.child_timeout != seconds:
@@ -329,7 +381,9 @@ class Engine:
     def on_address_assignment(self, ts: float, ext: str | None, rloc16: int | None) -> None:
         """A parent told a child its new RLOC16 (Child ID Response): binds MAC address and short address."""
         if ext is not None and rloc16 is not None and rloc16 not in (0xFFFE, 0xFFFF):
-            self.node_for(ts, ext=ext, rloc16=rloc16, touch=False)
+            node = self.node_for(ts, ext=ext, rloc16=rloc16, touch=False)
+            if node is not None:
+                node.behavior.pop("attach", None)  # answered
 
     def on_ip(self, ts: float, sender: Node | None, src: str | None, dst: str | None) -> None:
         """IPv6 addresses of a frame. Only addresses that identify their owner
@@ -359,9 +413,21 @@ class Engine:
 
     def on_leader_data(self, ts: float, sender: Node | None, partition_id: int,
                        leader_router_id: int, data_version: int | None = None) -> None:
+        known = partition_id in self.leaders
+        if known and self.leaders[partition_id] != leader_router_id:
+            self._net_log(ts, "leader_change", partition=partition_id, **{"from": self.leaders[partition_id], "to": leader_router_id})
+        elif not known and self.leaders:
+            self._net_log(ts, "partition_new", partition=partition_id, leader=leader_router_id)
         self.leaders[partition_id] = leader_router_id
         if data_version is not None:  # Network Data version the sender has (the leader raises it on every change)
-            self.data_versions[partition_id] = data_version
+            current = self.data_versions.get(partition_id)
+            if current is None or B.serial_newer(data_version, current):
+                if current is not None:
+                    self._net_log(ts, "netdata_version", partition=partition_id, version=data_version)
+                self.data_versions[partition_id] = current = data_version
+                self.data_version_ts[partition_id] = ts
+            if sender is not None:
+                self._netdata_lag(ts, sender, data_version, current, self.data_version_ts.get(partition_id, ts))
         self.partition_seen[partition_id] = max(self.partition_seen.get(partition_id, ts), ts)
         self.clock = max(self.clock, ts)
         # stay with the primary partition while it is alive: no flapping between concurrent partitions
@@ -370,6 +436,17 @@ class Engine:
         if sender is not None:
             sender.partition_id = partition_id
         self.dirty = True
+
+    def _netdata_lag(self, ts: float, node: Node, version: int, current: int, since: float) -> None:
+        """A router that keeps advertising an older Network Data version than its partition does not get the update."""
+        b = node.behavior
+        if version == current or not B.serial_newer(current, version):
+            b.pop("dv_lag", None)
+            return
+        lag = b.setdefault("dv_lag", {"since": since, "logged": False})  # behind since its partition got the new version
+        if not lag["logged"] and ts - lag["since"] >= B.NETDATA_LAG:
+            lag["logged"] = True
+            self._log(node, ts, "netdata_lag", version=version, current=current, seconds=round(ts - lag["since"]))
 
     def on_route64(self, ts: float, sender_rloc16: int,
                    entries: list[tuple[int, int, int, int]]) -> None:
@@ -449,6 +526,11 @@ class Engine:
             for node in self.nodes.values():
                 if node.border_router and node.rloc16 not in border_router_rloc16s:
                     node.border_router = False
+            brs = sorted(n.id for n in self.nodes.values() if n.border_router)
+            before = self._net_state.get("brs")
+            if before is not None and brs != before:
+                self._net_log(ts, "br_change", added=sorted(set(brs) - set(before)), removed=sorted(set(before) - set(brs)))
+            self._net_state["brs"] = brs
         self.dirty = True
 
     # ---- active diagnostics: a node that joined the network and asks it (meshdiag) ---------------------
@@ -623,9 +705,32 @@ class Engine:
                     self._log(node, now, "br_on" if sig["br"] else "br_off")
                 if sig["online"] != old["online"]:
                     self._log(node, now, "online" if sig["online"] else "offline")
+            self._network_tick()
             self.capture.prune(now)
             for node in self.nodes.values():
                 node.stats.prune(now)
+
+    def live_partitions(self) -> dict[int, int]:
+        """Partitions whose leader data still arrives (within 45 s of the newest one)."""
+        newest = max(self.partition_seen.values(), default=None)
+        return {pid: rid for pid, rid in self.leaders.items()
+                if newest is None or self.partition_seen.get(pid, newest) >= newest - 45.0}
+
+    def _network_tick(self) -> None:
+        """The network as a whole: a split into partitions and the merge, and the number of routers."""
+        ts = self.clock
+        parts = self.live_partitions()
+        routers = sum(1 for n in self.nodes.values() if n.rloc16 is not None and A.is_router_rloc(n.rloc16)
+                      and self.role_of(n) in (ROLE_LEADER, ROLE_ROUTER) and presence(
+                          n.last_heard, n.last_seen, n.last_addressed, "router", ts, n.last_diag, self.diag_ttl)[0])
+        before = self._net_state.get("partitions")
+        if before is not None and len(parts) != before:
+            self._net_log(ts, "partitions", count=len(parts), ids=sorted(parts))
+        self._net_state["partitions"] = len(parts)
+        before = self._net_state.get("routers")
+        if before is not None and routers != before:
+            self._net_log(ts, "routers", count=routers, before=before)
+        self._net_state["routers"] = routers
 
     def set_name(self, node_id: str, name: str | None) -> str | None:
         """Give a device a name; an empty name removes it. Returns the stored name."""
@@ -655,6 +760,7 @@ class Engine:
                 del self.names[nid]
             self.nodes.clear()
             self.pending_events.clear()
+            self._net_state.clear()  # the network log itself stays: it is the history
             self.rloc_index.clear()
             self.links.clear()
             self.link_metrics.clear()
@@ -780,7 +886,9 @@ class Engine:
                 if target is not None:
                     target.load_bucket(idx, values)
             for node_id, ts, kind, params in state.get("events", []):
-                if node_id in self.nodes:
+                if node_id == NETWORK_ID:
+                    self.net_events.append({"ts": ts, "kind": kind, "params": params})
+                elif node_id in self.nodes:
                     self.nodes[node_id].events.append({"ts": ts, "kind": kind, "params": params})
             for node in self.nodes.values():
                 node.events.sort(key=lambda e: e["ts"])

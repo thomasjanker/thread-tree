@@ -44,6 +44,10 @@ FIELDS: dict[str, list[str]] = {
     "route_in": ["mle.tlv.route64.nbr_in"],
     "route_out": ["mle.tlv.route64.nbr_out"],
     "mle_timeout": ["mle.tlv.timeout"],
+    "mle_supervision": ["mle.tlv.supervision_interval", "mle.tlv.supervision"],
+    "mle_link_margin": ["mle.tlv.link_margin"],
+    "frame_counter": ["wpan.aux_sec.frame_counter"],
+    "key_index": ["wpan.aux_sec.key_index"],
     "mode_ftd": ["mle.tlv.mode.device_type"],
     "mode_idle_rx": ["mle.tlv.mode.idle_rx"],
     "reg_ipv6": ["mle.tlv.addr_reg_ipv6"],
@@ -62,6 +66,7 @@ MLE_ADVERTISEMENT = 4
 MLE_PARENT_REQUEST = 9  # a device looks for a parent
 MLE_DISCOVERY_REQUEST = 16  # a device looks for networks (before commissioning)
 MLE_CHILD_ID_REQUEST = 11  # ... and asks the one it chose (the destination)
+MLE_PARENT_RESPONSE = 10  # a router offers itself, with the link margin it measured
 MLE_CHILD_ID_RESPONSE = 12  # parent -> child: carries the assigned Address16
 MLE_FROM_CHILD = (9, 11, 13)  # Parent Request, Child ID Request, Child Update Request
 MLE_CHILD_UPDATE_RESPONSE = 14  # from a child when its parent asked; from the parent otherwise
@@ -205,6 +210,9 @@ class Handler:
             e.on_data_request(ts, sender, dst16, dst_ext, sender_by_mac=ext is not None and src16 is None)
         e.on_ip(ts, sender, ip_src, self._one(layers, "ip_dst"))
 
+        counter = self._int(self._one(layers, "frame_counter"))
+        if counter is not None:
+            e.on_frame_counter(ts, sender, counter, self._int(self._one(layers, "key_index")))
         mle_cmd = self._int(self._one(layers, "mle_cmd"))
         addressed = any(v is not None for v in (src64, src16, dst64, dst16))
         e.record_frame(ts, sender, self._kind(layers, mle_cmd, mac_cmd, addressed), length,
@@ -255,7 +263,11 @@ class Handler:
             if entries:
                 e.on_route64(ts, src16, entries)
 
-        if cmd == MLE_PARENT_REQUEST:
+        if cmd == MLE_PARENT_RESPONSE:
+            dst64 = self._one(layers, "dst64")
+            e.on_parent_response(ts, sender, A.normalize_ext(dst64) if dst64 else None,
+                                 self._int(self._one(layers, "mle_link_margin")))
+        elif cmd == MLE_PARENT_REQUEST:
             e.on_parent_request(ts, sender)
         elif cmd == MLE_DISCOVERY_REQUEST:
             e.on_discovery_request(ts, sender)
@@ -279,6 +291,9 @@ class Handler:
             timeout = self._int(self._one(layers, "mle_timeout"))
             if timeout is not None and cmd in (MLE_CHILD_ID_REQUEST, 13):  # the child announces its timeout
                 e.on_child_timeout(ts, sender, timeout)
+            supervision = self._int(self._one(layers, "mle_supervision"))
+            if supervision is not None:
+                e.on_supervision_interval(ts, sender, supervision)
             ftd = self._bool(self._one(layers, "mode_ftd"))
             idle = self._bool(self._one(layers, "mode_idle_rx"))
             if ftd is not None and idle is not None:

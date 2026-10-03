@@ -189,3 +189,6 @@ span.mesh-badge.lq-3 { border-color: var(--ok); } span.mesh-badge.lq-1 { border-
 button:disabled { opacity: .5; cursor: default; } button:disabled:hover { border-color: var(--line); }
 .test-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
 .test-grid .card.test-card { display: flex; flex-direction: column; } .test-grid .card.test-card .toolbar { margin-top: auto; flex-wrap: wrap; }
+.segmented { display: inline-flex; gap: 4px; }
+.segmented button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+table.logtable td { vertical-align: middle; } tr.log-warn td:last-child { font-weight: 600; }

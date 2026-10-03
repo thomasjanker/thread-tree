@@ -14,11 +14,12 @@ import socket
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from .engine import Engine
 from .runtime import ConfigLocked, Controller, DiagUnavailable, TestBusy
 from .diagnose import node_diagnostics, nodes_csv, report
+from .eventlog import entries as log_entries, log_csv
 
 WEB_DIR = Path(__file__).parent / "web"
 MAX_BODY = 8192
@@ -128,6 +129,18 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._json(200, controller.status())
             if path == "/api/tests":
                 return self._json(200, controller.tests())
+            if path == "/api/log":
+                query = parse_qs(urlsplit(self.path).query)
+                level = (query.get("level") or [None])[0]
+                try:
+                    limit = max(1, min(5000, int((query.get("limit") or ["1000"])[0])))
+                except ValueError:
+                    return self._json(400, {"error": "limit must be a number"})
+                return self._json(200, {"entries": log_entries(engine, level, limit)})
+            if path == "/api/export/log.csv":
+                level = (parse_qs(urlsplit(self.path).query).get("level") or [None])[0]
+                return self._send(200, log_csv(engine, level).encode("utf-8"), "text/csv; charset=utf-8",
+                                  {"Content-Disposition": 'attachment; filename="thread-tree-log.csv"'})
             if path == "/api/config":
                 cfg = controller.config()
                 cfg["can_name"] = may_write(self.client_address[0], self.headers.get("Host"),

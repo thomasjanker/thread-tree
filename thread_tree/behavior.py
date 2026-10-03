@@ -77,3 +77,70 @@ def silence(behavior: dict, last_frame: float | None) -> dict | None:
         return None
     quiet = last_frame - last
     return {"seconds": round(quiet), "usual": round(usual, 1)} if quiet >= gap_threshold(usual) else None
+
+
+# ---- checks against the standard (all from the sniffer) --------------------------------------------------------
+
+MARGIN_SLACK = 10            # dB: a parent this much worse than the best offer is a poor choice
+ATTACH_ANSWER = 5.0          # s: a Child ID Request without a Child ID Response within this time was not answered
+COUNTER_AHEAD = 1000         # OpenThread stores the frame counter this far ahead: a restart skips forward by up to that
+COUNTER_JUMP_WITHIN = 120.0  # s: ... so a skip of that size in a short time means a restart
+ADV_GAP = 100.0              # s without an advertisement of a router (Trickle sends at least every 32 s) ...
+ADV_GAP_MAX = 900.0          # ... but longer means it was off (offline), not a timing fault
+SUPERVISION_SLACK = 1.5      # a gap in the frames to a child longer than this many supervision intervals breaks it
+NETDATA_LAG = 120.0          # s a router may advertise an older Network Data version than its partition
+
+
+def serial_newer(a: int, b: int) -> bool:
+    """a is newer than b (8-bit version numbers wrap around)."""
+    return 0 < (a - b) % 256 < 128
+
+
+def on_parent_response(behavior: dict, router: int, margin: int | None) -> None:
+    """A router offered to become the parent (MLE Parent Response with its link margin) during a search."""
+    search = behavior.get("search")
+    if search is not None and margin is not None:
+        search.setdefault("offers", {})[str(router)] = margin
+
+
+def judge_choice(search: dict | None, chosen: int | None) -> dict | None:
+    """The device chose `chosen`; was a clearly better offer ignored? (The device also weighs parent priority and
+    connectivity, so only a big difference counts.)"""
+    offers = (search or {}).get("offers") or {}
+    if chosen is None or str(chosen) not in offers or len(offers) < 2:
+        return None
+    best = max(offers, key=offers.get)
+    if offers[best] - offers[str(chosen)] >= MARGIN_SLACK:
+        return {"chosen": chosen, "best": int(best), "chosen_margin": offers[str(chosen)], "best_margin": offers[best]}
+    return None
+
+
+def on_frame_counter(behavior: dict, ts: float, counter: int, key: int | None) -> dict | None:
+    """MAC frame counter of a secured frame of this device. Returns a suspected restart."""
+    last = behavior.get("fc")
+    behavior["fc"] = [counter, key, ts]
+    if not last or last[1] != key:
+        return None  # first frame, or a key switch: every device starts counting again
+    prev, _, prev_ts = last
+    if counter < prev - 10:
+        return {"how": "reset", "from": prev, "to": counter}
+    if counter - prev >= COUNTER_AHEAD and ts - prev_ts <= COUNTER_JUMP_WITHIN:
+        return {"how": "skip", "from": prev, "to": counter}
+    return None
+
+
+def on_advertisement(behavior: dict, ts: float, sniffer_was_down) -> dict | None:
+    last = behavior.get("adv_last")
+    behavior["adv_last"] = max(ts, last or 0.0)
+    if last is not None and ADV_GAP <= ts - last < ADV_GAP_MAX and not sniffer_was_down(last, ts):
+        return {"seconds": round(ts - last)}
+    return None
+
+
+def on_addressed(behavior: dict, ts: float, sniffer_was_down) -> dict | None:
+    """A frame to this child (its parent's data, or a supervision message). Gap longer than its supervision interval?"""
+    last, interval = behavior.get("to_last"), behavior.get("supervision")
+    behavior["to_last"] = max(ts, last or 0.0)
+    if last is None or not interval or ts - last < SUPERVISION_SLACK * interval or sniffer_was_down(last, ts):
+        return None
+    return {"seconds": round(ts - last), "interval": interval}

@@ -26,6 +26,7 @@ see [Verification status](#verification-status).
 - [Quick start](#quick-start)
 - [Using the UI](#using-the-ui)
 - [Diagnosis and findings](#diagnosis-and-findings)
+- [Checks against the standard and the log](#checks-against-the-standard-and-the-log)
 - [Guided tests](#guided-tests)
 - [Active diagnostics](#active-diagnostics)
 - [Raspberry Pi setup](#raspberry-pi-setup)
@@ -39,13 +40,17 @@ see [Verification status](#verification-status).
 ## Features
 
 - **Views:** tree, mesh of the routers (link quality as colour and number), table (searchable, accepts MAC and IPv6
-  addresses as Home Assistant shows them), diagnosis, tests.
+  addresses as Home Assistant shows them), diagnosis, tests, log.
 - **Every device:** role (leader, router, full/minimal/sleepy end device), short address (RLOC16), MAC address
   (EUI-64), all IPv6 addresses (link-local, mesh-local, RLOC, OMR, …), parent or children, online state, your name for it.
 - **Diagnosis:** findings with an explanation and what to do; per device signal and traffic statistics, 24 h charts,
   timing, links, history; CSV and JSON export.
 - **Behaviour of sleepy devices:** poll rhythm, gaps longer than the child timeout, searches for a new parent — what
   happens when a battery device "stops working" for a while.
+- **Checks against the Thread standard:** parent choice, restarts, child supervision, Network Data versions,
+  advertisement timing, unanswered attaches, radio activity of sleepy devices.
+- **Log:** every device and network event (leader changes, partitions, border routers, routers), breaches of the
+  standard and losses as warnings; CSV export.
 - **Active diagnostics:** what the routers measure themselves, also for devices the sniffer cannot hear.
 - **Guided tests:** router, leader or border router outage, partition and merge, router upgrade, router coming back,
   re-attach after a battery change, commissioning — you do the physical part, the program records what the network does.
@@ -164,12 +169,36 @@ being so. Findings are hints, not proof. Thresholds are constants at the top of 
 | Searches for a parent | note / warning | MLE Parent Requests; warning from 3 searches in 24 h |
 | Polls barely within its timeout; silent right now | warning | poll interval 90 % of the child timeout or more; no poll for a gap's length now |
 | Parent offline / unknown, not heard directly, MAC unknown | warning / notes | |
+| Chose a weaker parent; restarted; parent did not supervise it; old Network Data; did not accept attaches | warning | see [Checks against the standard](#checks-against-the-standard-and-the-log) |
+| Gaps in its advertisements | note / warning | gaps of 100 s or more; warning from 3 in 24 h |
+| High radio activity for a sleepy device | note | polls more than every 10 s and 3 times the typical sleepy device |
 | Active: router loses frames to a neighbour | warning | 25 % of its frames (or 5 % of its messages) not delivered |
 | Active: poor link to its parent | note / warning | -90 dBm or weaker, or 25 % frames lost (5 % of messages: warning) |
 | Active: parent has not heard it for long; router does not answer detail queries; confirmed by diagnostics; diagnostics not working | notes / warning | |
 | Network: sniffer silent, decryption failing | critical | |
 | Network: partitions, leader changes, many offline, router limit | warning | |
 | Network: no / single border router, near the router limit | note | |
+
+## Checks against the standard and the log
+
+The sniffer checks continuously what the Thread specification requires; a breach is a finding of the device and a
+warning in the log:
+
+| Check | What counts as a breach |
+|---|---|
+| Parent choice | after a search the device attached to a router whose Parent Response offered 10 dB less link margin than the best one |
+| Restarts | the MAC frame counter of a device started again, or skipped ahead by 1000 or more within 2 minutes (OpenThread stores it that far ahead) |
+| Child supervision (Thread 1.2) | the parent sent a child nothing for 1.5 times the supervision interval the child announced |
+| Network Data | a router kept advertising an older Network Data version than its partition for more than 2 minutes |
+| Advertisement timing | a router sent no MLE advertisement for 100 s or more (Trickle: at least every 32 s) while the sniffer heard others |
+| Unanswered attaches | a Child ID Request got no Child ID Response (full child table, or lost frames); counted for the router |
+| Radio activity | a sleepy device polls more than every 10 s and 3 times as often as the typical sleepy device here |
+
+The **Log** tab lists all recorded events, newest first (30 days, 200 per device, 1000 for the network): those of the
+devices (role, parent, short address, online/offline, gaps, searches, the checks above) and those of the network as a
+whole (leader change, new partition, split and merge, border routers added or removed, number of routers, Network Data
+version). Warnings are the breaches of the standard and losses (offline, leader change, split, a router or border
+router lost, gaps beyond the child timeout); filter "Warnings only", text filter, CSV export.
 
 ## Guided tests
 
@@ -256,6 +285,8 @@ IKEA DIRIGERA, ESP32-C6 routers): joining, rounds, findings, manufacturer answer
 - signal statistics from the sniffer's TAP fields (`wpan-tap.rss`, `wpan-tap.lqi`, `wpan.seq_no`, …);
 - behaviour of sleepy devices (also the field `mle.tlv.timeout`) and the guided tests on a real network
   (`mle.tlv.leader_data.data_version`, MLE Discovery Request);
+- the checks against the standard (`mle.tlv.link_margin`, `mle.tlv.supervision_interval`,
+  `wpan.aux_sec.frame_counter`, `wpan.aux_sec.key_index`) and the network events;
 - sniffer and diagnostic node running together;
 - the ESP32 pcap bridge.
 
@@ -265,17 +296,9 @@ disables only its feature, with a warning in the log.
 ## Planned tests
 
 Ideas from the Thread specification, not implemented yet. **S** sniffer, **D** diagnostic node (its firmware has `ping`,
-`scan`, `counters`, `eidcache`). Suggested order: 15, 9, 8, 10. (Guided tests 1–7 are implemented, see above.)
+`scan`, `counters`, `eidcache`). Guided tests 1–7 are implemented, see above.
 
-Continuous checks against the standard (passive):
-
-8. Parent selection (S): routers answer a search with link margin and connectivity; did the device pick the best one?
-9. Reboot detection (S): frame counters only grow per sender; a counter that jumps back means a restart or reset.
-10. Child supervision (S): since Thread 1.2 the parent must contact a silent child within the supervision interval.
-11. Network Data versions (S): a router whose advertised data version keeps lagging does not receive Network Data.
-12. Advertisement timing (S): Trickle runs between 1 s and 32 s; gaps are not conform either.
-13. Full routers (S): a router that rejects attaches because its child table is full.
-14. Battery estimate (S): rough radio-on time from poll rhythm and traffic.
+The continuous checks 8–14 are implemented too (see [Checks against the standard](#checks-against-the-standard-and-the-log)).
 
 Active tests with the diagnostic node:
 
@@ -298,6 +321,7 @@ thread_tree/topology.py   snapshot and tree (leader root, best-quality router pa
 thread_tree/diagnose.py   findings, network summary, device page, CSV
 thread_tree/behavior.py   poll rhythm, gaps, parent searches
 thread_tree/scenario.py   guided tests
+thread_tree/eventlog.py   the log: events of devices and network with severity
 thread_tree/stats.py      per-device counters, RSSI, intervals, 10-minute buckets
 thread_tree/presence.py   online / offline rules
 thread_tree/addresses.py  EUI-64 / RLOC16 / IPv6 classification
@@ -316,7 +340,8 @@ firmware/nordic-sniffer/  Nordic's sniffer firmware, unmodified (own license)
 ```
 
 **API** (JSON; changing requests need `Content-Type: application/json`): `GET /api/topology`, `/api/status`,
-`/api/config`, `/api/diagnostics`, `/api/nodes/<id>/diagnostics`, `/api/export/nodes.csv`, `/api/tests`;
+`/api/config`, `/api/diagnostics`, `/api/nodes/<id>/diagnostics`, `/api/export/nodes.csv`, `/api/tests`,
+`/api/log?level=warn&limit=1000`, `/api/export/log.csv`;
 `POST /api/config/dataset` `{"dataset": "<hex>"}`, `DELETE /api/config/dataset`, `PUT /api/nodes/<id>/name`
 `{"name": "…"}`, `POST /api/topology/reset`, `/api/diagnostics/run`, `/api/diagnostics/enabled` `{"enabled": true}`,
 `/api/tests/start` `{"kind": "router_outage", "target": "<id>"}`, `/api/tests/stop`.
