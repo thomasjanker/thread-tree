@@ -7,7 +7,6 @@ routing of the network.
 
 from __future__ import annotations
 
-import ipaddress
 import re
 import time
 from collections.abc import Callable
@@ -23,6 +22,7 @@ IDENTITY_COMMANDS = ("eui64", "extaddr", "rloc16", "ipaddr", "leaderdata", "netw
 NETDIAG_BASIC = "0 1 2 8 16"
 # ... EUI-64, Thread version, vendor name/model/software version, stack version
 NETDIAG_INFO = "23 24 25 26 27 28"
+VENDOR_QUERIES = 4   # routers asked for vendor and model, to see how the devices answer
 MAX_ROUTERS = 12
 
 _SECRET_RUN = re.compile(r"\b[0-9a-fA-F]{32,}\b")  # network key, PSKc, dataset TLVs
@@ -56,7 +56,7 @@ class Probe:
         """Run a command, record command and output; None if the device answered with an error."""
         self.emit(f"$ {shown or command}")
         try:
-            lines = self.cli.command(command, timeout)
+            lines = self.cli.command(command, timeout, secret=shown is not None)
         except OtCliError as err:
             self.emit(f"  ! {err.message or 'error'} (error {err.code})")
             return None
@@ -77,6 +77,22 @@ class Probe:
                 return state
             time.sleep(interval)
         return state
+
+
+def _mesh_prefix(ipaddr: list[str] | None, own_rloc16: int | None) -> int | None:
+    """Mesh-local /64 from the node's own RLOC address (its interface ID is 0:ff:fe00:<rloc16>)."""
+    for text in ipaddr or []:
+        addr = A.parse_ip(text)
+        if addr is not None and A.is_rloc_iid(A.iid(addr)) and (own_rloc16 is None or A.iid(addr) & 0xFFFF == own_rloc16):
+            return A.prefix64(addr)
+    return None
+
+
+def _own_rloc16(lines: list[str] | None) -> int | None:
+    try:
+        return int(lines[0], 16) if lines else None
+    except ValueError:
+        return None
 
 
 def _routers(*outputs: list[str] | None) -> list[int]:
@@ -134,6 +150,10 @@ def run_probe(cli: OtCli, dataset_hex: str | None, join: bool = True, emit: Call
 
     caps = summary["capabilities"]
     routers: list[int] = []
+    prefix = _mesh_prefix(results.get("ipaddr"), _own_rloc16(results.get("rloc16")))
+    if prefix is None and caps.get("networkdiagnostic"):
+        own_rloc = p.step("ipaddr rloc")
+        prefix = _mesh_prefix(own_rloc, None)
     if caps.get("meshdiag"):
         p.emit("# --- mesh diagnostics ---")
         topology = p.step("meshdiag topology", long_timeout)
@@ -143,14 +163,13 @@ def run_probe(cli: OtCli, dataset_hex: str | None, join: bool = True, emit: Call
             p.step(f"meshdiag childtable 0x{rloc16:04x}", 30)
             p.step(f"meshdiag childip6 0x{rloc16:04x}", 30)
             p.step(f"meshdiag routerneighbortable 0x{rloc16:04x}", 30)
+        if caps.get("networkdiagnostic") and prefix is not None:
+            p.emit("# --- vendor information (networkdiagnostic) ---")
+            for rloc16 in routers[:VENDOR_QUERIES]:
+                p.step(f"networkdiagnostic get {A.rloc_address(prefix, rloc16)} {NETDIAG_INFO}", 30)
     elif caps.get("networkdiagnostic"):
         p.emit("# --- network diagnostics (no meshdiag in this firmware) ---")
         routers = _routers(results.get("router table"))
-        own_rloc = p.step("ipaddr rloc")
-        try:
-            prefix = int(ipaddress.IPv6Address(own_rloc[0])) >> 64 if own_rloc else None
-        except ValueError:
-            prefix = None
         if prefix is None:
             p.emit("# cannot derive router addresses: the node's own RLOC address is unknown")
         for rloc16 in routers[:MAX_ROUTERS] if prefix is not None else []:

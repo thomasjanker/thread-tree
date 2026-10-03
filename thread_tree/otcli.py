@@ -10,6 +10,7 @@ import os
 import re
 import select
 import termios
+import threading
 import time
 import tty
 from types import TracebackType
@@ -31,10 +32,15 @@ class OtCliTimeout(TimeoutError):
     """No terminating 'Done' / 'Error' line within the time limit."""
 
 
+class OtCliCancelled(Exception):
+    """The cancel event was set while a command was running."""
+
+
 class OtCli:
     def __init__(self, port: str, timeout: float = 15.0):
         self.port, self.timeout = port, timeout
         self.fd: int | None = None
+        self.cancel: threading.Event | None = None  # when set, a running command stops waiting
         self._commands: set[str] | None = None
 
     # ---- connection ---------------------------------------------------------
@@ -98,18 +104,24 @@ class OtCli:
 
     # ---- commands -----------------------------------------------------------
 
-    def command(self, line: str, timeout: float | None = None) -> list[str]:
-        """Run one CLI command and return its output lines (without echo, prompt and 'Done')."""
+    def command(self, line: str, timeout: float | None = None, secret: bool = False) -> list[str]:
+        """Run one CLI command and return its output lines (without echo, prompt and 'Done').
+        secret: the command contains a secret (the dataset): it never appears in an error message."""
         limit = self.timeout if timeout is None else timeout
+        shown = "<command with a secret>" if secret else line
+        if self.cancel is not None and self.cancel.is_set():  # asked to stop: send nothing more
+            raise OtCliCancelled(f"{shown!r}: cancelled")
         self._drain()
         self._write(line + "\n")
         deadline = time.monotonic() + limit
         out: list[str] = []
         buf, echoed = "", False
         while True:
+            if self.cancel is not None and self.cancel.is_set():
+                raise OtCliCancelled(f"{shown!r}: cancelled")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise OtCliTimeout(f"{line!r}: no response within {limit:.0f} s")
+                raise OtCliTimeout(f"{shown!r}: no response within {limit:.0f} s")
             buf += self._read(min(remaining, 0.5))
             while "\n" in buf:
                 raw, buf = buf.split("\n", 1)
@@ -123,7 +135,7 @@ class OtCli:
                     return out
                 error = _ERROR.match(text)
                 if error:
-                    raise OtCliError(line, int(error.group(1)), error.group(2))
+                    raise OtCliError(shown, int(error.group(1)), error.group(2))
                 out.append(text)
 
     def commands(self) -> set[str]:

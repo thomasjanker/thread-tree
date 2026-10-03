@@ -6,7 +6,8 @@ import unittest
 from pathlib import Path
 
 WEB = Path(__file__).resolve().parent.parent / "thread_tree" / "web"
-NAMES = "fmtDuration, fmtBytes, fmtPct, fmtDbm, fillTemplate, niceMax, scaleLinear, hourTicks, rssiRange"
+NAMES = ("fmtDuration, fmtBytes, fmtPct, fmtDbm, fmtDb, fmtPercentValue, fmtThreadVersion, fmtCost, fillTemplate, "
+         "niceMax, scaleLinear, hourTicks, rssiRange")
 
 HARNESS = r"""
 const {GLib} = imports.gi;
@@ -37,6 +38,19 @@ class FormatTests(unittest.TestCase):
         got = run([["fmtBytes", 500], ["fmtBytes", 1536], ["fmtBytes", 1048576], ["fmtBytes", None],
                    ["fmtPct", 0.153], ["fmtPct", 0.153, 1], ["fmtPct", None], ["fmtDbm", -70.4], ["fmtDbm", None]])
         self.assertEqual(got, ["500 B", "1.5 KB", "1 MB", "–", "15 %", "15.3 %", "–", "-70 dBm", "–"])
+
+    def test_measurements_of_the_routers(self):
+        got = run([["fmtDb", 27.4], ["fmtDb", None], ["fmtPercentValue", 0], ["fmtPercentValue", 0.69], ["fmtPercentValue", 3.29],
+                   ["fmtPercentValue", 9.96], ["fmtPercentValue", 25.45], ["fmtPercentValue", 53.93], ["fmtPercentValue", 0.04],
+                   ["fmtPercentValue", None]])
+        self.assertEqual(got, ["27 dB", "–", "0 %", "0.7 %", "3.3 %", "10 %", "25 %", "54 %", "0 %", "–"])
+
+    def test_route_cost_may_be_unknown(self):
+        self.assertEqual(run([["fmtCost", 1], ["fmtCost", 0], ["fmtCost", None]]), ["1", "0", "–"])
+
+    def test_thread_versions(self):
+        got = run([["fmtThreadVersion", v] for v in (3, 4, 5, 6, None)])
+        self.assertEqual(got, ["1.2", "1.3", "1.4", "v6", "–"])
 
     def test_templates_and_plurals(self):
         got = run([

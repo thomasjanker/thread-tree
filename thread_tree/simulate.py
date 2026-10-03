@@ -8,6 +8,7 @@ import time
 
 from . import addresses as A
 from .engine import Engine
+from .otdiag import Child, Router, RouterNeighbor
 
 ML_PREFIX = 0xFD123456789A0001
 OMR_PREFIX = 0xFDAB000000010000
@@ -151,7 +152,107 @@ def seed_history(engine: Engine, now: float, hours: int = 24, seed: int = 7) -> 
             node.events.sort(key=lambda e: e["ts"])
 
 
-def populate(engine: Engine, now: float | None = None, history: bool = False) -> None:
+# ---- active diagnostics: what a node that joined the network and asked it would have learned -------------
+
+VERSIONS = {0: 5, 5: 5, 9: 4, 17: 4, 22: 5}   # Thread version of each router: 4 = 1.3, 5 = 1.4
+NO_DETAIL = {17}                              # an old router: answers the topology query, not the detail queries
+STICK = "f4ce36fffe0000d1"                    # the diagnostic node: a stick that joined as a child of the border router
+STICK_RLOC = (5 << 10) | 3
+VENDORS = {                                   # devices that answer the vendor query (made-up names)
+    "c8d1d1fffe000001": ("Example Corp", "Hub 1", "1.4.2"),
+    "c8d1d1fffe000005": ("Example Corp", "Border Router 2", "2.1.0"),
+    "c8d1d1fffe000009": ("Sample Lighting", "Bulb A60", "1.0.7"),
+    "c8d1d1fffe000016": ("Sample Lighting", "Plug 3", "1.0.7"),
+    "a4c138fffe100001": ("Demo Sensors", "Motion 1", "0.9.1"),
+    "a4c138fffe100003": ("Demo Sensors", "Switch 2", "0.9.1"),
+    "a4c138fffe100007": ("Sample Lighting", "Bulb A60", "1.0.7"),
+}
+OLD_CHILD = "a4c138fffe100004"                # a sleepy device at the edge of its parent's range: nearly dropped out
+CHILD_LINK = {OLD_CHILD: (-91, 27.0, 1.5)}    # its link, which the passive statistics cannot show (RSS, frame %, message %)
+# link quality -> (RSS dBm, frame error %, message error %) of a typical link of that quality
+LINK_BY_LQ = {3: (-62, 2.0, 0.0), 2: (-82, 6.5, 0.2), 1: (-93, 38.0, 4.0)}
+
+
+def _link_values(rng: random.Random, rss: int, frame_err: float, msg_err: float) -> dict:
+    rss = rss + rng.randint(-2, 2)
+    return {"rss_ave": rss, "rss_last": rss + rng.randint(-2, 2), "margin": rss + 100,
+            "frame_err": round(max(0.0, frame_err * rng.uniform(0.85, 1.15)), 2), "msg_err": msg_err}
+
+
+def seed_active(engine: Engine, now: float, seed: int = 3) -> None:
+    """Feed the engine what one round of the active diagnostics returns, through the same methods the
+    collector uses: versions, both ends of every link, signal and error rates, children with their parent's
+    view, vendor data, and the diagnostic node itself."""
+    rng = random.Random(seed + int(now // 60))
+    with engine.lock:
+        engine.set_diag_self(STICK)
+        engine.on_frame(now, STICK, STICK_RLOC)     # the stick sits next to the sniffer: heard directly
+        stick = engine.nodes[STICK]
+        engine.on_mode(now, stick, True, True)      # a full Thread device that stays an end device
+        engine.record_frame(now, stick, "data", 80, -45, 200, rng.randrange(256), "1400")
+        routers: list[Router] = []
+        for rid, (ext, _, is_br) in ROUTERS.items():
+            links: dict[int, list[int]] = {}
+            for a, b, lq_in, lq_out in LINKS:
+                if rid == a:
+                    links.setdefault(lq_in, []).append(b)
+                elif rid == b:
+                    links.setdefault(lq_out, []).append(a)
+            children = []
+            for node in sorted(engine.nodes.values(), key=lambda n: n.rloc16 or 0):
+                if node.rloc16 is None or A.is_router_rloc(node.rloc16) or (node.rloc16 >> 10) != rid:
+                    continue
+                mode = ("r" if node.rx_on_idle else "") + ("d" if node.ftd else "") + ("n" if node.ftd else "")
+                children.append(Child(rloc16=node.rloc16, lq=3 if node.rx_on_idle else 2, mode=mode,
+                                      me=node.ext == STICK))
+            routers.append(Router(router_id=rid, rloc16=rid << 10, ext=ext, version=VERSIONS[rid], leader=rid == 0,
+                                  border_router=is_br, links=links, children=children))
+        engine.on_diag_topology(now, routers, 0x1A2B3C4D)
+
+        by_rid = {rid: ext for rid, (ext, _, _) in ROUTERS.items()}
+        for r in routers:
+            if r.router_id in NO_DETAIL:
+                continue
+            neighbors = []
+            for a, b, lq_in, lq_out in LINKS:
+                other, lq = (b, lq_in) if r.router_id == a else (a, lq_out) if r.router_id == b else (None, 0)
+                if other is not None:
+                    neighbors.append(RouterNeighbor(rloc16=other << 10, ext=by_rid[other], version=VERSIONS[other],
+                                                    conn_time=rng.randint(40_000, 400_000), **_link_values(rng, *LINK_BY_LQ[lq])))
+            engine.on_diag_neighbors(now, r.rloc16, neighbors)
+            kids = []
+            for c in r.children or []:
+                node = engine.nodes[engine.rloc_index[c.rloc16]]
+                sleepy = not node.rx_on_idle
+                rss, err, msg = (CHILD_LINK.get(node.ext) or (PROFILES[node.ext][0], PROFILES[node.ext][2] * 220, 0.0)
+                                 if node.ext in PROFILES else (-45, 0.0, 0.0))
+                age = 215 if node.ext == OLD_CHILD else rng.randint(0, 60) if sleepy else rng.randint(0, 5)
+                kids.append(Child(rloc16=c.rloc16, ext=node.ext, version=5 if node.ftd else 4, timeout=240, age=age,
+                                  supervision=129 if sleepy else 0, queued=0, rx_on_idle=bool(node.rx_on_idle),
+                                  device_type="ftd" if node.ftd else "mtd", full_net=bool(node.ftd),
+                                  conn_time=rng.randint(1_000, 800_000), **_link_values(rng, rss, err, msg)))
+            engine.on_diag_childtable(now, kids)
+        asked = 0
+        for node in list(engine.nodes.values()):
+            if node.rloc16 is None or node.vendor is not None or node.ext not in VENDORS and node.ext not in (
+                    e for e, _, _ in ROUTERS.values()):
+                continue
+            vendor = VENDORS.get(node.ext)
+            engine.on_diag_vendor(now, node.rloc16, None if vendor is None else
+                                  {"name": vendor[0], "model": vendor[1], "sw": vendor[2], "stack": "1.4.0"})
+            asked += vendor is not None
+        engine.diag_info = {"enabled": True, "demo": True, "state": "idle", "error": None, "ts": now, "duration": 6.4,
+                            "routers": len(routers), "children": sum(len(r.children or []) for r in routers),
+                            "failures": {rid << 10: "ResponseTimeout" for rid in NO_DETAIL}, "vendor": asked,
+                            "next": now + 300.0, "own_rloc16": engine.nodes[STICK].rloc16}
+
+
+def refresh_active(engine: Engine, now: float) -> None:
+    """Another round in the demo (also what 'query now' does there)."""
+    seed_active(engine, now)
+
+
+def populate(engine: Engine, now: float | None = None, history: bool = False, active: bool = False) -> None:
     now = time.time() if now is None else now
     with engine.lock:
         engine.fixed_ml_prefix = ML_PREFIX
@@ -170,6 +271,8 @@ def populate(engine: Engine, now: float | None = None, history: bool = False) ->
             engine.on_registered_addresses(now, node, [_iid_addr(ML_PREFIX, ext)])
         if history:
             seed_history(engine, now)
+        if active:
+            seed_active(engine, now)
 
 
 class Simulator(threading.Thread):
@@ -180,6 +283,7 @@ class Simulator(threading.Thread):
         self.engine, self.interval = engine, interval
         self.rng = random.Random(1)
         self.seqs = {ext: [self.rng.randrange(256)] for ext in PROFILES}
+        self._active_at = 0.0
         self._stop_evt = threading.Event()
 
     def step(self, now: float) -> None:
@@ -194,6 +298,12 @@ class Simulator(threading.Thread):
                 if node.ext in INDIRECT:  # never heard, but other nodes keep addressing it
                     self.engine.on_destination(now, node.ext)
             advertise(self.engine, now)
+            if self.engine.diag_info.get("demo"):  # a round of the active diagnostics every minute
+                if self._active_at == 0.0:
+                    self._active_at = now  # populate() has just done the first one
+                elif now - self._active_at >= 60.0:
+                    refresh_active(self.engine, now)
+                    self._active_at = now
             flapper = self.engine.nodes.get(FLAPPER)
             if flapper is not None and self.rng.random() < 0.02:  # now and then it moves to the other router
                 new_parent = 9 if flapper.rloc16 and (flapper.rloc16 >> 10) == 17 else 17

@@ -16,16 +16,19 @@ from collections import Counter
 from dataclasses import dataclass, field
 
 from . import addresses as A
+from .otdiag import Child, Netdata, Router, RouterNeighbor
 from .presence import presence
 from .stats import NodeStats
 
 MAX_NAME = 64
 EVENTS_PER_NODE = 200
+CHILD_TIMEOUT_DEFAULT = 240.0  # a child in a parent's table was heard within its timeout (this is the usual value)
 CAPTURE_ID = "_capture"  # statistics of the whole capture are stored like a node, under this id
 # Freshness, measured on the capture's own clock (latest observed timestamp), so a paused capture or a
 # replayed pcap keeps its last known state. Routers advertise at least every 32 s (MLE trickle).
 PARTITION_TTL = 180.0  # a partition without leader data for this long is gone (network re-formed)
 LINK_TTL = 180.0       # a router link not re-reported for this long is stale
+DIAG_TTL = 900.0       # links listed by the latest active round stay current this long without a new round (3 x the default interval)
 ROLE_LEADER, ROLE_ROUTER = "leader", "router"
 ROLE_FED, ROLE_MED, ROLE_SED = "fed", "med", "sed"
 ROLE_CHILD, ROLE_UNKNOWN = "child", "unknown"  # child: end device, type not yet known
@@ -50,6 +53,11 @@ class Node:
     mac_confirmed: float = 0.0  # last own frame with its MAC address, or MAC<->RLOC16 binding
     parent_hint: int | None = None  # RLOC16 of the router this end device polls, learned from MAC data requests
     last_role: str | None = None
+    version: int | None = None  # Thread version number (4 = 1.3, 5 = 1.4), from an active diagnostic answer
+    last_diag: float = 0.0  # last time the node proved to be alive in an active diagnostic answer
+    link: dict | None = None  # its link to the parent as the parent measures it (children only)
+    vendor: dict | None = None  # name / model / software, from networkdiagnostic
+    vendor_try: float = 0.0  # when the vendor data was last asked for (also when it failed)
     stats: NodeStats = field(default_factory=NodeStats)
     events: list = field(default_factory=list)  # {"ts", "kind", "params"}, oldest first, capped
     sig: dict | None = None  # state at the last tick, to detect changes (not persisted)
@@ -78,6 +86,13 @@ class Engine:
         # user-given device names, keyed by node id (the extended address: stable across re-parenting
         # and across pruning; a name for an RLOC16-only node is dropped if that node is pruned)
         self.names: dict[str, str] = {}
+        # measurements between routers, from the neighbour tables: (measuring router id, neighbour router id) -> dict
+        self.link_metrics: dict[tuple[int, int], dict] = {}
+        self.contexts: dict[int, int] = {}  # 6LoWPAN context id -> upper 64 bits of its prefix (from Network Data)
+        self.diag_self: str | None = None  # extended address of the node that runs the active diagnostics
+        self.diag_ts = 0.0  # time of the latest topology answer of the active diagnostics
+        self.diag_ttl = DIAG_TTL  # how long its answers count as current (the collector raises it for long intervals)
+        self.diag_info: dict = {}  # status of the active collector, for the UI (not persisted)
         self.capture = NodeStats()  # all frames heard, including those without transmitter address (ACKs)
         self.pending_events: list[tuple[str, dict]] = []  # not yet saved
         self.dirty = False
@@ -105,7 +120,11 @@ class Engine:
         return node.partition_id if self.is_current_partition(node.partition_id) else self.primary_partition
 
     def link_is_fresh(self, link: dict) -> bool:
-        return link["last_seen"] >= self.clock - LINK_TTL
+        if link["last_seen"] >= self.clock - LINK_TTL:
+            return True
+        # a link the latest active round listed stays current while rounds keep coming: they are minutes apart,
+        # advertisements (which refresh links passively) seconds
+        return self.diag_ts > 0 and link["last_seen"] >= self.diag_ts and self.clock - self.diag_ts <= self.diag_ttl
 
     def role_of(self, node: Node) -> str:
         if node.rloc16 is not None:
@@ -200,6 +219,11 @@ class Engine:
         into.last_seen = max(into.last_seen, prov.last_seen)
         into.last_heard = max(into.last_heard, prov.last_heard)
         into.last_addressed = max(into.last_addressed, prov.last_addressed)
+        into.last_diag = max(into.last_diag, prov.last_diag)
+        for attr in ("version", "link", "vendor"):
+            if getattr(into, attr) is None:
+                setattr(into, attr, getattr(prov, attr))
+        into.vendor_try = max(into.vendor_try, prov.vendor_try)
         into.stats.merge(prov.stats)
         self.pending_events = [(nid, ev) for nid, ev in self.pending_events if nid != prov.id]
         for event in prov.events:  # the history follows the device to its stable id (and is saved under it)
@@ -378,11 +402,149 @@ class Engine:
                     node.border_router = False
         self.dirty = True
 
+    # ---- active diagnostics: a node that joined the network and asks it (meshdiag) ---------------------
+
+    def set_diag_self(self, ext: str | None) -> None:
+        with self.lock:
+            old, self.diag_self = self.diag_self, ext
+            if old and ext and old != ext:
+                self._retire(old, ext)
+            self.dirty = True
+
+    def _retire(self, old_id: str, new_id: str) -> None:
+        """The diagnostic node came back with another extended address (it was reset, or the stick was replaced).
+        The old identity is gone for good: it must not stay behind as an offline device. Its name moves on."""
+        node = self.nodes.pop(old_id, None)
+        if node is None:
+            return
+        if node.rloc16 is not None and self.rloc_index.get(node.rloc16) == old_id:
+            del self.rloc_index[node.rloc16]
+        self.pending_events = [(nid, ev) for nid, ev in self.pending_events if nid != old_id]
+        if old_id in self.names:
+            self.names.setdefault(new_id, self.names.pop(old_id))
+
+    def _add_diag_addr(self, node: Node, text: str, ts: float) -> None:
+        addr = A.parse_ip(text)
+        if addr is None or addr.is_multicast:
+            return
+        if A.classify(addr, self.ml_prefix) not in (A.LINK_LOCAL, A.RLOC):  # those two are derived anyway
+            self._add_addr(node, addr, ts)
+
+    def on_diag_topology(self, ts: float, routers: list[Router], partition_id: int | None = None,
+                         leader_router_id: int | None = None) -> None:
+        """Result of `meshdiag topology ip6-addrs children`: every router that answered, with its links,
+        addresses and children. The border-router flag of a listed router is taken as authoritative.
+        leader_router_id: from `leaderdata`, for the case that the leader itself is not in the list."""
+        with self.lock:
+            leader_rid = next((r.router_id for r in routers if r.leader), leader_router_id)
+            for r in routers:
+                node = self.node_for(ts, ext=r.ext, rloc16=r.rloc16, touch=False)
+                if node is None:
+                    continue
+                node.version = r.version
+                node.last_diag = max(node.last_diag, ts)
+                node.border_router = r.border_router
+                if r.border_router:
+                    node.br_seen = max(node.br_seen, ts)
+                if partition_id is not None and leader_rid is not None:
+                    self.on_leader_data(ts, node, partition_id, leader_rid)
+                for text in r.ip6:
+                    self._add_diag_addr(node, text, ts)
+                for child in r.children or []:
+                    self._diag_child_listed(ts, child)
+            self._diag_links(ts, routers)
+            self.dirty = True
+
+    def _diag_child_listed(self, ts: float, child: Child) -> None:
+        node = self.node_for(ts, rloc16=child.rloc16, touch=False)
+        if node is None:
+            return
+        if child.mode is not None:  # flags r (rx on when idle), d (full thread device), n (full network data)
+            self.on_mode(ts, node, "d" in child.mode, "r" in child.mode)
+        # listed in its parent's child table: the parent heard it within the child timeout, not necessarily just now
+        node.last_diag = max(node.last_diag, ts - CHILD_TIMEOUT_DEFAULT)
+        if child.me and self.diag_self and node.ext is None:
+            self.node_for(ts, ext=self.diag_self, rloc16=child.rloc16, touch=False)
+
+    def _diag_links(self, ts: float, routers: list[Router]) -> None:
+        """Each router lists its neighbours by link quality as it measures them: both directions of a link are known."""
+        measured = {(r.router_id, rid): lq for r in routers for lq, ids in r.links.items() for rid in ids}
+        listed = {r.router_id for r in routers}
+        for key in [k for k in self.links if k[0] in listed and k not in measured]:
+            del self.links[key]  # these routers described all their neighbours: the rest is not a link
+        for (a, b), lq in measured.items():
+            old = self.links.get((a, b))
+            # the other direction is what b measures; a router that did not answer cannot say, keep what its advertisements said
+            out = measured.get((b, a), old["lq_out"] if old and b not in listed else 0)
+            self.links[(a, b)] = {"lq_in": lq, "lq_out": out, "cost": old["cost"] if old else None, "last_seen": ts}
+        self.diag_ts = max(self.diag_ts, ts)
+        self.clock = max(self.clock, ts)
+
+    def on_diag_childtable(self, ts: float, children: list[Child]) -> None:
+        """`meshdiag childtable <router>`: the children of one router with their MAC address and link measurements."""
+        with self.lock:
+            for c in children:
+                node = self.node_for(ts, ext=c.ext, rloc16=c.rloc16, touch=False)
+                if node is None:
+                    continue
+                node.version = c.version
+                if c.device_type is not None and c.rx_on_idle is not None:
+                    self.on_mode(ts, node, c.device_type == "ftd", c.rx_on_idle)
+                node.last_diag = max(node.last_diag, ts - (c.age or 0))  # the age is when the parent last heard it
+                node.link = {"rss_ave": c.rss_ave, "rss_last": c.rss_last, "margin": c.margin, "frame_err": c.frame_err,
+                             "msg_err": c.msg_err, "conn_time": c.conn_time, "timeout": c.timeout,
+                             "supervision": c.supervision, "queued": c.queued, "age": c.age, "ts": ts}
+            self.dirty = True
+
+    def on_diag_childip6(self, ts: float, addresses: dict[int, list[str]]) -> None:
+        with self.lock:
+            for rloc16, texts in addresses.items():
+                node = self.nodes.get(self.rloc_index.get(rloc16, ""))
+                if node is not None:
+                    for text in texts:
+                        self._add_diag_addr(node, text, ts)
+            self.dirty = True
+
+    def on_diag_neighbors(self, ts: float, router_rloc16: int, neighbors: list[RouterNeighbor]) -> None:
+        """`meshdiag routerneighbortable <router>`: how this router hears each neighbour (real signal and error rate)."""
+        with self.lock:
+            rid = A.router_id(router_rloc16)
+            listed = {A.router_id(n.rloc16) for n in neighbors}
+            for key in [k for k in self.link_metrics if k[0] == rid and k[1] not in listed]:
+                del self.link_metrics[key]  # the table is complete: a neighbour that is gone is not a link any more
+            for n in neighbors:
+                self.link_metrics[(rid, A.router_id(n.rloc16))] = {
+                    "rss_ave": n.rss_ave, "rss_last": n.rss_last, "margin": n.margin, "frame_err": n.frame_err,
+                    "msg_err": n.msg_err, "conn_time": n.conn_time, "ts": ts}
+                node = self.node_for(ts, ext=n.ext, rloc16=n.rloc16, touch=False)
+                if node is not None:
+                    node.version = n.version
+            self.clock = max(self.clock, ts)
+            self.dirty = True
+
+    def on_diag_netdata(self, ts: float, data: Netdata) -> None:
+        """Network Data as the diagnostic node sees it (it asks for the full copy): contexts and border routers."""
+        with self.lock:
+            self.contexts.update(data.context_prefixes64())
+            self.on_network_data(ts, data.border_router_rloc16s(), complete=True)
+
+    def on_diag_vendor(self, ts: float, rloc16: int, info: dict | None) -> None:
+        """Vendor data of the device with this RLOC16; info None if it did not answer (do not ask again at once)."""
+        with self.lock:
+            node = self.nodes.get(self.rloc_index.get(rloc16, ""))
+            if node is None:
+                return
+            node.vendor_try = ts
+            if info:
+                node.vendor = info
+                node.last_diag = max(node.last_diag, ts)
+            self.dirty = True
+
     # ---- history ------------------------------------------------------------
 
     def _signature(self, node: Node, now: float) -> dict:
         role = self.role_of(node)
-        online, _ = presence(node.last_heard, node.last_seen, node.last_addressed, role, now)
+        online, _ = presence(node.last_heard, node.last_seen, node.last_addressed, role, now, node.last_diag, self.diag_ttl)
         return {"role": role, "rloc16": node.rloc16, "parent": self.parent_router_id(node),
                 "partition": self.partition_of(node), "br": node.border_router, "online": online}
 
@@ -446,6 +608,9 @@ class Engine:
             self.pending_events.clear()
             self.rloc_index.clear()
             self.links.clear()
+            self.link_metrics.clear()
+            self.diag_ts = 0.0
+            self.contexts.clear()
             self.leaders.clear()
             self.partition_seen.clear()
             self.primary_partition = None
@@ -457,7 +622,8 @@ class Engine:
 
     def prune(self, now: float, max_age: float) -> int:
         with self.lock:
-            stale = [n.id for n in self.nodes.values() if max(n.last_seen, n.last_addressed) < now - max_age]
+            stale = [n.id for n in self.nodes.values()
+                     if max(n.last_seen, n.last_addressed, n.last_diag) < now - max_age]
             for nid in stale:
                 del self.nodes[nid]
                 if nid.startswith("rloc16:"):  # unstable id: its name cannot be re-attached later
@@ -465,6 +631,8 @@ class Engine:
             self.rloc_index = {r: i for r, i in self.rloc_index.items() if i in self.nodes}
             for key in [k for k, v in self.links.items() if v["last_seen"] < now - max_age]:
                 del self.links[key]
+            for key in [k for k, v in self.link_metrics.items() if v["ts"] < now - max_age]:
+                del self.link_metrics[key]
             for pid in [p for p, seen in self.partition_seen.items() if seen < now - max_age]:
                 del self.partition_seen[pid]
                 self.leaders.pop(pid, None)
@@ -494,12 +662,14 @@ class Engine:
                     {**{k: getattr(n, k) for k in (
                         "id", "ext", "rloc16", "partition_id", "ftd", "rx_on_idle", "polls",
                         "border_router", "br_seen", "mac_confirmed", "first_seen", "last_seen", "last_heard",
-                        "last_addressed", "parent_hint", "last_role")},
+                        "last_addressed", "parent_hint", "last_role", "version", "last_diag", "link", "vendor",
+                        "vendor_try")},
                      "stats": n.stats.to_json(),
                      "addresses": {a: list(t) for a, t in n.addresses.items()}}
                     for n in self.nodes.values()
                 ],
                 "links": [{"src": s, "dst": d, **v} for (s, d), v in self.links.items()],
+                "link_metrics": [{"src": s, "dst": d, "data": dict(v)} for (s, d), v in self.link_metrics.items()],
                 "names": dict(self.names),
                 "meta": {
                     "leaders": {str(k): v for k, v in self.leaders.items()},
@@ -509,6 +679,8 @@ class Engine:
                     "ml_votes": {str(k): v for k, v in self.ml_votes.items()},
                     "fixed_ml_prefix": self.fixed_ml_prefix,
                     "capture_stats": self.capture.to_json(),
+                    "contexts": {str(k): v for k, v in self.contexts.items()},
+                    "diag_self": self.diag_self,
                 },
             }
 
@@ -540,6 +712,8 @@ class Engine:
                     self.rloc_index[node.rloc16] = node.id
             for d in state.get("links", []):
                 self.links[(d["src"], d["dst"])] = {k: d[k] for k in ("lq_in", "lq_out", "cost", "last_seen")}
+            for d in state.get("link_metrics", []):
+                self.link_metrics[(d["src"], d["dst"])] = dict(d["data"])
             meta = state.get("meta", {})
             self.names = {k: v for k, v in state.get("names", {}).items()
                           if k in self.nodes or not k.startswith("rloc16:")}
@@ -547,6 +721,9 @@ class Engine:
             self.partition_seen = {int(k): v for k, v in meta.get("partition_seen", {}).items()}
             self.clock = meta.get("clock", 0.0)
             self.capture = NodeStats.from_json(meta.get("capture_stats"))
+            self.contexts = {int(k): v for k, v in meta.get("contexts", {}).items()}
+            if self.diag_self is None:
+                self.diag_self = meta.get("diag_self")
             for node_id, idx, values in state.get("buckets", []):
                 target = self.capture if node_id == CAPTURE_ID else (
                     self.nodes[node_id].stats if node_id in self.nodes else None)

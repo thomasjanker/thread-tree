@@ -17,7 +17,7 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 from .engine import Engine
-from .runtime import ConfigLocked, Controller
+from .runtime import ConfigLocked, Controller, DiagUnavailable
 from .diagnose import node_diagnostics, nodes_csv, report
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -194,11 +194,15 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 self._json(400, {"error": str(exc)})
 
         def do_POST(self):
-            if self.path.split("?", 1)[0] == "/api/topology/reset":
-                return self._reset_topology()
+            path = self.path.split("?", 1)[0]
+            if path == "/api/topology/reset":
+                return self._action(controller.rebuild_topology)
+            if path == "/api/diagnostics/run":
+                return self._action(controller.run_diagnostics)
             self._config_write("set")
 
-        def _reset_topology(self) -> None:
+        def _action(self, action) -> None:
+            """A state-changing request without parameters: same access rule as naming a device."""
             if not self._write_allowed():
                 return
             if not may_write(self.client_address[0], self.headers.get("Host"), controller.allow_remote_config):
@@ -208,7 +212,10 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                     return
             except (ValueError, json.JSONDecodeError) as exc:
                 return self._json(400, {"error": str(exc)})
-            self._json(200, controller.rebuild_topology())
+            try:
+                self._json(200, action())
+            except DiagUnavailable as exc:
+                self._json(409, {"error": str(exc)})
 
         def do_DELETE(self):
             self._config_write("clear")

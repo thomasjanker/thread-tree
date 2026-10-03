@@ -2,7 +2,8 @@ import unittest
 
 from thread_tree.diagnose import report
 from thread_tree.engine import Engine
-from thread_tree.simulate import FLAPPER, PROFILES, Simulator, populate, seed_history
+from thread_tree.simulate import (FLAPPER, NO_DETAIL, OLD_CHILD, PROFILES, STICK, VENDORS, Simulator, populate, refresh_active,
+                                  seed_history)
 
 NOW = 10 * 86400.0 + 5000
 BR, WEAK, CRIT = "c8d1d1fffe000005", "c8d1d1fffe000011", "c8d1d1fffe000009"
@@ -82,6 +83,77 @@ class SeedTests(unittest.TestCase):
         self.assertGreater(e.nodes[BR].stats.frames, before)
         self.assertGreater(e.nodes["c8d1d1fffe000016"].last_addressed, before_addressed)
         self.assertEqual(e.nodes["c8d1d1fffe000016"].last_heard, 0)  # still never heard
+
+
+def demo(now=NOW):
+    e = Engine()
+    populate(e, now=now, history=True, active=True)
+    e.tick(now)
+    return e
+
+
+def codes(analysis, nid):
+    return {f["code"]: f for f in analysis["nodes"][nid]["findings"]}
+
+
+class ActiveSeedTests(unittest.TestCase):
+    def test_plain_populate_has_no_active_data(self):
+        e = Engine()
+        populate(e, now=NOW, history=True)
+        self.assertEqual(e.diag_info, {})
+        self.assertEqual(e.link_metrics, {})
+        self.assertNotIn(STICK, e.nodes)
+        self.assertTrue(all(n.version is None and n.vendor is None and n.link is None for n in e.nodes.values()))
+
+    def test_versions_vendors_and_links(self):
+        e = demo()
+        self.assertEqual({n.version for n in e.nodes.values() if n.rloc16 is not None and n.rloc16 % 1024 == 0}, {4, 5})
+        self.assertEqual(e.nodes[BR].vendor["model"], "Border Router 2")
+        self.assertEqual(e.nodes["c8d1d1fffe000009"].vendor, {"name": "Sample Lighting", "model": "Bulb A60", "sw": "1.0.7", "stack": "1.4.0"})
+        self.assertIsNone(e.nodes[WEAK].vendor)                       # the old router answers nothing
+        self.assertEqual(len([n for n in e.nodes.values() if n.vendor]), len(VENDORS))
+        self.assertFalse([k for k in e.link_metrics if k[0] == 17])   # and measures nothing
+        self.assertTrue([k for k in e.link_metrics if k[1] == 17])    # but the others measure their links to it
+
+    def test_the_diagnostic_node_is_a_full_end_device_next_to_the_sniffer(self):
+        e = demo()
+        n = e.nodes[STICK]
+        self.assertEqual((e.diag_self, n.rloc16 >> 10, e.role_of(n), n.last_heard > 0), (STICK, 5, "fed", True))
+        self.assertEqual(sum(1 for x in e.nodes.values() if x.rloc16 is None), 0)
+
+    def test_the_findings_that_need_the_active_data(self):
+        e = demo()
+        _, a = report(e, NOW + 1, {"running": True, "stats": {"mle_ok": 10, "mle_failed": 0}})
+        self.assertEqual(codes(a, CRIT)["link_lossy"]["params"]["neighbor_node"], WEAK)   # router 9 loses frames to router 17
+        self.assertIn("router_no_detail", codes(a, WEAK))
+        self.assertTrue({"child_link_poor", "child_age_high"} <= set(codes(a, OLD_CHILD)))
+        self.assertEqual(a["summary"]["active"]["state"], "idle")
+        self.assertEqual({f["node"] for f in a["summary"]["active"]["failures"]}, {WEAK})
+        self.assertEqual(a["summary"]["active"]["own_node"], STICK)
+        self.assertEqual({f["code"] for f in a["summary"]["findings"]}, {"single_border_router"})
+
+    def test_a_demo_round_refreshes_everything_and_never_makes_nodes_up_twice(self):
+        e = demo()
+        count = len(e.nodes)
+        refresh_active(e, NOW + 300)
+        self.assertEqual((len(e.nodes), e.diag_info["ts"]), (count, NOW + 300))
+        self.assertTrue(all(m["ts"] == NOW + 300 for m in e.link_metrics.values()))
+
+    def test_the_simulator_runs_a_round_every_minute(self):
+        e = demo()
+        sim = Simulator(e, interval=5.0)
+        for i in range(1, 12):                                          # up to a minute after the first step
+            sim.step(NOW + 5 * i)
+        self.assertEqual(e.diag_info["ts"], NOW)                         # the round of populate()
+        sim.step(NOW + 65)
+        self.assertEqual(e.diag_info["ts"], NOW + 65)
+
+    def test_the_simulator_stays_passive_without_the_seeding(self):
+        e = seeded()
+        sim = Simulator(e, interval=5.0)
+        for i in range(1, 14):
+            sim.step(NOW + 5 * i)
+        self.assertEqual((e.diag_info, e.link_metrics), ({}, {}))
 
 
 if __name__ == "__main__":

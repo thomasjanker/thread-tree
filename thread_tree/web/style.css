@@ -164,3 +164,7 @@ td.num, th.num { text-align: right; white-space: nowrap; }
 details.minor { margin-top: 10px; }
 details.minor > summary { cursor: pointer; color: var(--muted); padding: 4px 0; }
 .toolbar input[type="search"] { flex: 1; min-width: 240px; max-width: 480px; }
+.card-actions { margin-top: 8px; }
+.card-actions button { font-size: 12px; padding: 2px 10px; }
+.card-actions p { margin: 6px 0 0; }
+td.loss-high { color: var(--crit); font-weight: 600; }

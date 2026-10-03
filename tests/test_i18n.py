@@ -43,6 +43,14 @@ class I18nTests(unittest.TestCase):
                 for name in re.findall(PLACEHOLDER, EN[f"finding.{code}.{part}"]):
                     self.assertIn(name, sent[code], f"finding.{code}.{part} uses {{{name}}}, the server sends {sorted(sent[code])}")
 
+    def test_every_state_of_the_collector_has_a_text(self):
+        """The UI builds the key from the state the collector reports (t('diag.state.' + state)), which a scan of the JS misses."""
+        states = set(re.findall(r'state="([^"]+)"', (WEB.parent / "collector.py").read_text(encoding="utf-8")))
+        self.assertGreaterEqual(states, {"starting", "waiting for dataset", "joining", "joined", "querying", "idle", "error"})
+        for state in states:
+            for lang, d in (("en", EN), ("de", DE)):
+                self.assertIn("diag.state." + state.replace(" ", "_"), d, f"{lang}: {state}")
+
     def test_every_translation_key_used_in_the_javascript_exists(self):
         used = set()
         for js in ("app.js", "diag.js", "charts.js"):

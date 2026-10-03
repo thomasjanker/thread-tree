@@ -15,8 +15,8 @@ IDENTITY_VIA_RLOC_AFTER = 3600.0
 _TYPE_ORDER = {A.ML_EID: 0, A.OMR: 1, A.RLOC: 2, A.ALOC: 3, A.LINK_LOCAL: 4, A.UNCLASSIFIED: 5}
 
 
-def _online(n: Node, role: str, now: float) -> dict:
-    online, indirect = presence(n.last_heard, n.last_seen, n.last_addressed, role, now)
+def _online(n: Node, role: str, now: float, diag_ttl: float) -> dict:
+    online, indirect = presence(n.last_heard, n.last_seen, n.last_addressed, role, now, n.last_diag, diag_ttl)
     return {"online": online, "online_indirect": indirect}
 
 
@@ -67,9 +67,12 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
                 "name": engine.names.get(n.id),
                 "role": role, "border_router": n.border_router, "partition_id": pids[n.id],
                 "ftd": n.ftd, "rx_on_idle": n.rx_on_idle,
-                **_online(n, role, now),
-                "first_seen": n.first_seen, "last_seen": n.last_seen, "last_addressed": n.last_addressed,
+                **_online(n, role, now, engine.diag_ttl),
+                "first_seen": n.first_seen, "last_seen": max(n.last_seen, n.last_diag),  # any sign of life, also the network's own
+                "last_addressed": n.last_addressed,
                 "heard": n.last_heard > 0, "last_heard": n.last_heard,
+                "version": n.version, "last_diag": n.last_diag, "link": n.link, "vendor": n.vendor,
+                "diag_self": bool(engine.diag_self and n.ext == engine.diag_self),
                 "mac_confirmed": n.mac_confirmed, "br_seen": n.br_seen,
                 "identity_via_rloc": bool(n.ext and n.rloc16 is not None
                                           and n.last_heard - n.mac_confirmed > IDENTITY_VIA_RLOC_AFTER),
@@ -84,7 +87,8 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
             for (pid, rid), nid in by_rid.items():
                 if rid == src:
                     links.append({"from": nid, "to": by_rid.get((pid, dst)), "from_router_id": src,
-                                  "to_router_id": dst, "stale": not engine.link_is_fresh(m), **m})
+                                  "to_router_id": dst, "stale": not engine.link_is_fresh(m), **m,
+                                  "metrics": engine.link_metrics.get((src, dst))})
         partitions = []
         for pid in sorted(set(pids.values()) | {p for p in engine.leaders if engine.is_current_partition(p)}):
             members = [nodes[i] for i in nodes if nodes[i]["partition_id"] == pid]
@@ -102,6 +106,7 @@ def _placeholder(nodes: dict, nid: str, **extra) -> None:
                   "role": ROLE_UNKNOWN, "border_router": False, "partition_id": None,
                   "ftd": None, "rx_on_idle": None, "online": False, "online_indirect": False, "first_seen": 0, "last_seen": 0, "last_addressed": 0,
                   "heard": False, "last_heard": 0, "mac_confirmed": 0, "br_seen": 0, "identity_via_rloc": False,
+                  "version": None, "last_diag": 0, "link": None, "vendor": None, "diag_self": False,
                   "addresses": [], "placeholder": True, **extra}
 
 

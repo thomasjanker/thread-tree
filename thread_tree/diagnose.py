@@ -1,7 +1,9 @@
 """Diagnosis: findings per node and for the network, from the topology snapshot, the statistics and the history.
 
-Everything is derived from what a passive sniffer hears, so every finding is an observation with the
-limits of that method (see the explanations in the UI). Thresholds are constants here on purpose.
+Most of it is derived from what a passive sniffer hears, so those findings are observations with the limits of
+that method (see the explanations in the UI). With the active diagnostics (a node that joined the network and
+asks it, see collector.py) there are also measurements the routers made themselves. Thresholds are constants
+here on purpose.
 """
 
 from __future__ import annotations
@@ -11,6 +13,7 @@ import io
 from collections import defaultdict
 
 from .engine import Engine
+from .otdiag import THREAD_VERSIONS
 from .topology import snapshot
 
 SEVERITY_RANK = {"ok": 0, "info": 1, "warn": 2, "crit": 3}
@@ -29,6 +32,12 @@ ROUTER_NEAR_LIMIT = 28
 SNIFFER_SILENT = 60.0        # seconds without any frame
 MANY_OFFLINE = 0.3
 LEADER_CHANGES_WARN = 2
+# measurements of the routers themselves (active diagnostics); the error rates are percent
+LINK_ERR_WARN = 25.0         # share of frames a device could not deliver to a neighbour (no acknowledgement) ...
+MSG_ERR_WARN = 5.0           # ... or of messages that were lost although every frame was repeated
+RSS_WEAK_LINK = -90          # dBm that a device receives from its neighbour: near what the radios can still decode
+CHILD_AGE_WARN = 0.8         # share of its timeout that a parent has not heard a child
+ACTIVE_STALE = 3600.0        # active measurements older than this say nothing about now (the collector stopped)
 
 
 # Every code a finding can have; the UI needs a title, a text and a hint for each (tested in both languages).
@@ -37,6 +46,7 @@ FINDING_CODES = (
     "unknown_parent", "parent_offline", "reparenting", "retry_high", "signal_weak", "indirect_only", "no_mac",
     "sniffer_silent", "decrypt_failing", "partitions", "no_border_router", "single_border_router", "router_limit",
     "router_near_limit", "leader_changes", "many_offline",
+    "link_lossy", "child_link_poor", "child_age_high", "router_no_detail", "indirect_confirmed", "diag_failing",
 )
 
 
@@ -111,6 +121,58 @@ def critical_routers(g: dict, leader_nid: str | None, children_of: dict[str, int
 
 # ---- findings -----------------------------------------------------------------------------------------
 
+def _fresh(ts: float | None, now: float, ttl: float = ACTIVE_STALE) -> bool:
+    return bool(ts) and now - ts <= ttl
+
+
+def _ttl(engine: Engine) -> float:
+    """How long active measurements count: an hour, or three rounds if the collector is set to a longer interval."""
+    return max(ACTIVE_STALE, engine.diag_ttl)
+
+
+def _lossy(m: dict) -> bool:
+    return (m.get("frame_err") or 0.0) >= LINK_ERR_WARN or (m.get("msg_err") or 0.0) >= MSG_ERR_WARN
+
+
+def _fraction(percent: float | None) -> float | None:
+    return None if percent is None else percent / 100.0
+
+
+def _active_router_findings(engine: Engine, n: dict, raw, graph: dict | None, now: float) -> list[dict]:
+    """What the router measured itself: neighbours it cannot deliver frames to; and whether it answers at all."""
+    out: list[dict] = []
+    by_rid = graph["routers"] if graph else {}
+    lossy = sorted(((m.get("frame_err") or 0.0, dst, m) for (src, dst), m in engine.link_metrics.items()
+                    if src == n["router_id"] and _fresh(m.get("ts"), now, _ttl(engine)) and _lossy(m)),
+                   key=lambda x: (-x[0], x[1]))
+    if lossy:
+        _, dst, m = lossy[0]
+        out.append(finding("link_lossy", "warn", neighbor_node=by_rid.get(dst) or f"0x{dst << 10:04x}",
+                           rate=_fraction(m.get("frame_err")), msg_rate=_fraction(m.get("msg_err")),
+                           rssi=m.get("rss_ave"), links=len(lossy)))
+    failures = engine.diag_info.get("failures") or {}
+    if raw is not None and raw.rloc16 in failures and _fresh(engine.diag_info.get("ts"), now, _ttl(engine)):
+        out.append(finding("router_no_detail", "info"))
+    return out
+
+
+def _active_child_findings(raw, now: float, ttl: float) -> list[dict]:
+    """The parent's measurements of an end device: how well it hears it and delivers to it, and when it last heard it."""
+    link = raw.link if raw is not None else None
+    if not link or not _fresh(link.get("ts"), now, ttl):
+        return []
+    out: list[dict] = []
+    rss = link.get("rss_ave")  # not the margin: it depends on the noise floor each chip assumes
+    if _lossy(link) or (rss is not None and rss <= RSS_WEAK_LINK):
+        severity = "warn" if (link.get("msg_err") or 0.0) >= MSG_ERR_WARN else "info"
+        out.append(finding("child_link_poor", severity, rssi=rss, rate=_fraction(link.get("frame_err")),
+                           msg_rate=_fraction(link.get("msg_err"))))
+    age, timeout = link.get("age"), link.get("timeout")
+    if age is not None and timeout and age / timeout >= CHILD_AGE_WARN:
+        out.append(finding("child_age_high", "info", age=age, timeout=timeout))
+    return out
+
+
 def _recent(events: list[dict], kinds: tuple[str, ...], now: float, both_known: bool = False) -> int:
     count = 0
     for ev in events:
@@ -164,6 +226,7 @@ def _node_findings(engine: Engine, nodes: dict, nid: str, now: float, graph: dic
         flaps = _recent(raw.events, ("role", "rloc16"), now) if raw else 0
         if flaps >= FLAP_WARN:
             out.append(finding("role_flap", "warn", count=flaps))
+        out.extend(_active_router_findings(engine, n, raw, graph, now))
 
     if not is_router and not n.get("placeholder"):
         prid = n["parent_router_id"]
@@ -177,6 +240,7 @@ def _node_findings(engine: Engine, nodes: dict, nid: str, now: float, graph: dic
         moves = _recent(raw.events, ("parent",), now, both_known=True) if raw else 0
         if moves >= REPARENT_WARN:
             out.append(finding("reparenting", "warn", count=moves))
+        out.extend(_active_child_findings(raw, now, _ttl(engine)))
 
     if st is not None:
         w = st.window(now, 144)
@@ -185,7 +249,10 @@ def _node_findings(engine: Engine, nodes: dict, nid: str, now: float, graph: dic
         if w["rssi_n"] >= RSSI_MIN_SAMPLES and w["rssi_avg"] < RSSI_WEAK:
             out.append(finding("signal_weak", "info", rssi=w["rssi_avg"], samples=w["rssi_n"]))
     if not n["heard"] and not n.get("placeholder"):
-        out.append(finding("indirect_only", "info"))
+        if _fresh(n.get("last_diag"), now, _ttl(engine)):  # the network itself vouches for it
+            out.append(finding("indirect_confirmed", "info", since=n["last_diag"]))
+        else:
+            out.append(finding("indirect_only", "info"))
     if n["ext"] is None and not n.get("placeholder"):
         out.append(finding("no_mac", "info"))
     return out
@@ -218,10 +285,30 @@ def _network_findings(engine: Engine, snap: dict, nodes: dict, summary: dict, ca
         out.append(finding("leader_changes", "warn", count=leader_changes))
     if total >= 5 and summary["nodes"]["offline"] / total >= MANY_OFFLINE:
         out.append(finding("many_offline", "warn", offline=summary["nodes"]["offline"], total=total))
+    active = engine.diag_info
+    if active.get("enabled") and active.get("state") == "error" and active.get("error"):
+        out.append(finding("diag_failing", "warn", message=active["error"]))
     return out
 
 
 # ---- the report ---------------------------------------------------------------------------------------
+
+def _active_summary(engine: Engine, nodes: dict) -> dict:
+    """State of the active collector for the UI. It knows routers by RLOC16, the UI wants the devices."""
+    info = engine.diag_info
+    if not info:
+        return {"enabled": False}
+    by_rloc = {n["rloc16"]: nid for nid, n in nodes.items() if n["rloc16"]}
+    failures = [{"rloc16": f"0x{rloc:04x}", "node": by_rloc.get(f"0x{rloc:04x}"), "message": message}
+                for rloc, message in sorted((info.get("failures") or {}).items())]
+    own = info.get("own_rloc16")
+    return {"enabled": bool(info.get("enabled")), "demo": bool(info.get("demo")), "state": info.get("state"),
+            "error": info.get("error"), "ts": info.get("ts"), "duration": info.get("duration"),
+            "next": info.get("next"), "routers": info.get("routers"), "children": info.get("children"),
+            "vendor": info.get("vendor"), "failures": failures,
+            "own_rloc16": None if own is None else f"0x{own:04x}",
+            "own_node": engine.diag_self if engine.diag_self in nodes else None}
+
 
 def analyze(engine: Engine, snap: dict, now: float, capture: dict | None = None) -> dict:
     """capture: {"running": bool, "stats": {"mle_ok", "mle_failed", ...}} of the capture thread, if known."""
@@ -295,6 +382,7 @@ def analyze(engine: Engine, snap: dict, now: float, capture: dict | None = None)
             },
             "critical_routers": [{"id": r, **c} for r, c in crit.items()],
         }
+        summary["active"] = _active_summary(engine, real)
         network = _network_findings(engine, snap, real, summary, capture, now)
         summary["findings"] = network
         summary["status"] = worst(network + [f for v in per_node.values() for f in v["findings"]])
@@ -320,10 +408,16 @@ def node_diagnostics(engine: Engine, snap: dict, analysis: dict, node_id: str, n
         nodes = snap["nodes"]
         is_router = n["role"] in ("leader", "router")
 
-        def label(other_id: str | None) -> dict | None:
+        def label(other_id: str | None, detail: bool = False) -> dict | None:
             o = nodes.get(other_id) if other_id else None
-            return None if o is None else {"id": o["id"], "name": o["name"], "rloc16": o["rloc16"], "ext": o["ext"],
-                                          "role": o["role"], "online": o["online"], "placeholder": bool(o.get("placeholder"))}
+            if o is None:
+                return None
+            out = {"id": o["id"], "name": o["name"], "rloc16": o["rloc16"], "ext": o["ext"], "role": o["role"],
+                   "online": o["online"], "placeholder": bool(o.get("placeholder"))}
+            if detail:  # what the active diagnostics know about it
+                out.update(version=o["version"], link=o["link"], last_diag=o["last_diag"], ftd=o["ftd"],
+                           rx_on_idle=o["rx_on_idle"], diag_self=o["diag_self"])
+            return out
 
         links = []
         children = []
@@ -338,9 +432,10 @@ def node_diagnostics(engine: Engine, snap: dict, analysis: dict, node_id: str, n
                 links.append({"neighbor": label(by_rid.get(other_rid)), "neighbor_router_id": other_rid,
                               "reported_by": "self" if src == n["router_id"] else "neighbor",
                               "lq_in": m["lq_in"], "lq_out": m["lq_out"], "cost": m["cost"],
-                              "age": max(0.0, engine.clock - m["last_seen"]), "stale": not engine.link_is_fresh(m)})
+                              "age": max(0.0, engine.clock - m["last_seen"]), "stale": not engine.link_is_fresh(m),
+                              "metrics": engine.link_metrics.get((src, dst))})
             links.sort(key=lambda l: (l["neighbor_router_id"], l["reported_by"]))
-            children = [label(c["id"]) for c in nodes.values()
+            children = [label(c["id"], True) for c in nodes.values()
                         if not c.get("placeholder") and c["role"] not in ("leader", "router")
                         and c["parent_router_id"] == n["router_id"] and c["partition_id"] == n["partition_id"]]
         elif n["parent_router_id"] is not None:
@@ -355,6 +450,8 @@ def node_diagnostics(engine: Engine, snap: dict, analysis: dict, node_id: str, n
             "first_seen": n["first_seen"], "last_seen": n["last_seen"], "last_heard": n["last_heard"],
             "last_addressed": n["last_addressed"], "mac_confirmed": n["mac_confirmed"],
             "status": info["status"], "findings": info["findings"],
+            "version": n["version"], "last_diag": n["last_diag"], "vendor": n["vendor"], "link": n["link"],
+            "diag_self": n["diag_self"], "ftd": n["ftd"], "rx_on_idle": n["rx_on_idle"],
             "stats": raw.stats.summary(now), "series": raw.stats.series(now, 24),
             "links": links, "children": children, "parent": parent,
             "events": [{"ts": e["ts"], "kind": e["kind"], "params": e["params"]} for e in reversed(raw.events[-100:])],
@@ -366,7 +463,9 @@ def node_diagnostics(engine: Engine, snap: dict, analysis: dict, node_id: str, n
 
 CSV_COLUMNS = ("id", "name", "mac", "rloc16", "role", "online", "heard", "partition", "border_router", "parent_router_id",
                "first_seen", "last_seen", "last_heard", "last_addressed", "frames", "bytes", "retries", "retry_rate",
-               "rssi_avg", "rssi_min", "rssi_max", "adv_mean_s", "poll_mean_s", "addressed", "status", "findings")
+               "rssi_avg", "rssi_min", "rssi_max", "adv_mean_s", "poll_mean_s", "addressed", "status", "findings",
+               "thread_version", "last_diag", "vendor", "model", "firmware", "parent_rssi", "parent_margin",
+               "parent_frame_err")
 
 
 def _csv_text(value) -> str:
@@ -396,7 +495,10 @@ def nodes_csv(engine: Engine, snap: dict, analysis: dict, now: float) -> str:
                    None if not rssi else round(rssi["avg"], 1), None if not rssi else rssi["min"],
                    None if not rssi else rssi["max"], None if not adv else round(adv["mean"], 1),
                    None if not poll else round(poll["mean"], 1), s["addressed"], info["status"],
-                   " ".join(f["code"] for f in info["findings"])]
-            row[1] = _csv_text(row[1])  # only the user-given name needs defusing; numbers stay numbers
+                   " ".join(f["code"] for f in info["findings"]),
+                   THREAD_VERSIONS.get(n["version"], n["version"]), n["last_diag"] or None,
+                   *[_csv_text((n["vendor"] or {}).get(key)) for key in ("name", "model", "sw")],
+                   *[(n["link"] or {}).get(key) for key in ("rss_ave", "margin", "frame_err")]]
+            row[1] = _csv_text(row[1])  # the user-given name and the texts a device reports need defusing; numbers stay
             writer.writerow(row)
     return out.getvalue()

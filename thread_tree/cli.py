@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from .capture import DEFAULT_EXTCAP_SCRIPT
-from .dataset import parse_dataset
+from .dataset import normalize_hex, parse_dataset
 from .engine import Engine
 from .runtime import Controller
 from .server import is_loopback, make_server
@@ -36,6 +36,12 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--local-config-only", action="store_true",
                      help="only accept the dataset from this machine (e.g. through an SSH tunnel); by default "
                           "any machine that can reach the UI may enter it, and the key travels unencrypted over HTTP")
+    run.add_argument("--diag-port",
+                     help="serial device of a second nRF52840 with OpenThread CLI firmware (see docs/diagnostics.md), "
+                          "best /dev/serial/by-id/usb-...: it joins the network as an end device and asks the routers "
+                          "(active diagnostics)")
+    run.add_argument("--diag-interval", type=float, default=300.0,
+                     help="seconds between two rounds of questions (default 300, from 10 to 3600)")
     run.add_argument("--tshark", default="tshark")
     run.add_argument("--tshark-arg", action="append", default=[], help="extra tshark argument (repeatable)")
     sub.add_parser("demo", parents=[common], help="serve a simulated network (no hardware)")
@@ -80,7 +86,7 @@ def _diag_probe(args: argparse.Namespace) -> int:
         except ValueError as exc:
             print(f"invalid dataset: {exc}", file=sys.stderr)
             return 2
-        dataset_hex = "".join(raw.split()).lower()
+        dataset_hex = normalize_hex(raw)
     out = Path(args.out or time.strftime("diag-probe-%Y%m%d-%H%M%S.txt"))
     try:
         cli = OtCli(args.port).open()
@@ -123,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
     engine.load_state(store.load())
 
     if args.cmd == "demo":
-        populate(engine, history=True)
+        populate(engine, history=True, active=True)
         controller = Controller(engine, "demo", editable=False, locked_reason="demo", allow_remote_config=True)
     else:
         if args.channel is not None and not 11 <= args.channel <= 26:
@@ -136,7 +142,8 @@ def main(argv: list[str] | None = None) -> int:
                 cli_dataset=args.dataset or os.environ.get("THREAD_TREE_DATASET"),
                 cli_key=args.key or os.environ.get("THREAD_TREE_KEY"),
                 tshark=args.tshark, extra=args.tshark_arg, extcap_script=args.extcap_script,
-                allow_remote_config=not args.local_config_only)
+                allow_remote_config=not args.local_config_only,
+                diag_port=args.diag_port, diag_interval=args.diag_interval)
         except ValueError as exc:
             print(f"invalid dataset: {exc}", file=sys.stderr)
             return 2
@@ -151,6 +158,10 @@ def main(argv: list[str] | None = None) -> int:
         sim.start()
     else:
         controller.start_capture()
+        if args.diag_port:
+            logging.info("active diagnostics through %s every %.0f s", args.diag_port,
+                         min(3600.0, max(10.0, args.diag_interval)))
+            controller.start_diagnostics()
 
     def _terminate(*_):  # SIGTERM (systemd, docker stop) -> same clean shutdown as Ctrl+C
         raise KeyboardInterrupt
@@ -171,6 +182,7 @@ def main(argv: list[str] | None = None) -> int:
         pass
     finally:
         server.server_close()
+        controller.stop_diagnostics()
         controller.stop_capture()
         if sim:
             sim.stop()

@@ -5,6 +5,7 @@
 const SEVERITIES = ['ok', 'info', 'warn', 'crit'];
 const sevRank = sev => SEVERITIES.indexOf(sev);
 const RSSI_WEAK_DBM = -85;  // same threshold as the server uses for its finding
+const LINK_LOSS_HIGH = 25;  // percent of frames lost: the server's threshold for a lossy link
 
 // ---- formatting that needs translations or topology ----------------------------------------------------
 
@@ -20,8 +21,9 @@ function paramText(key, value) {
   }
   if (key === 'since') return ago(value);
   if (key === 'rate') return fmtPct(value);
+  if (key === 'msg_rate') return fmtPct(value, 1);
   if (key === 'rssi') return fmtDbm(value);
-  if (key === 'mean' || key === 'seconds') return fmtDuration(value);
+  if (key === 'mean' || key === 'seconds' || key === 'age' || key === 'timeout') return fmtDuration(value);
   return String(value);
 }
 
@@ -91,6 +93,16 @@ async function loadDiagnostics() {
   }
 }
 
+async function askNow() {
+  try {
+    const res = await fetch('/api/diagnostics/run', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.status);
+    notify(t('diag.active.asked'));
+    poll();
+  } catch (err) { notify(`${t('set.error')}: ${err.message}`, true); }
+}
+
 // ---- small building blocks ------------------------------------------------------------------------------
 
 const card = (title, value, sub, extra) => h('div', { class: 'card' },
@@ -113,6 +125,18 @@ function findingRow(f, nodeId) {
 
 // ---- overview ------------------------------------------------------------------------------------------
 
+function activeCard(active) {
+  if (!active || !active.enabled) return card(t('diag.card.active'), t('diag.active.off'), t('diag.active.off.sub'));
+  const name = f => (f.node && state.topo.nodes[f.node] ? nodeName(state.topo.nodes[f.node]) : f.rloc16);
+  const sub = active.state === 'error' ? active.error
+    : active.ts ? fillTemplate(t('diag.active.sub'), { ago: ago(active.ts), routers: active.routers ?? 0, children: active.children ?? 0 }, (k, v) => v) : null;
+  const silent = active.failures || [];
+  return card(t('diag.card.active'), t('diag.state.' + String(active.state || 'starting').replace(/ /g, '_')), sub,
+    h('div', { class: 'card-actions' },
+      h('button', { type: 'button', disabled: state.config?.can_name === false ? 'disabled' : null, onclick: askNow }, t('diag.active.ask')),
+      silent.length ? h('p', { class: 'card-sub' }, fillTemplate(t('diag.active.failures'), { n: silent.length, names: silent.map(name).join(', ') }, (k, v) => v)) : null));
+}
+
 function overviewCards(sum) {
   const topo = state.topo;
   const names = ids => ids.map(id => (topo.nodes[id] ? nodeName(topo.nodes[id]) : id)).join(', ');
@@ -134,6 +158,7 @@ function overviewCards(sum) {
     card(t('diag.card.capture'), cap.last_frame_age === null ? '–' : fmtDuration(cap.last_frame_age),
       decrypted === null ? fillTemplate(t('diag.card.capture.sub.nodecrypt'), { frames: cap.frames_last_hour }, (k, v) => v)
         : fillTemplate(t('diag.card.capture.sub'), { frames: cap.frames_last_hour, pct: fmtPct(decrypted) }, (k, v) => v)),
+    activeCard(sum.active),
     card(t('diag.card.since'), cap.first_frame ? ago(cap.first_frame) : '–', cap.first_frame ? absTime(cap.first_frame) : null));
 }
 
@@ -161,6 +186,7 @@ const SORTS = {
   status: (n, d) => sevRank(d.status),
   name: n => nodeName(n).toLowerCase(),
   role: n => ROLES.indexOf(n.role),
+  version: n => n.version ?? -1,
   frames: (n, d) => d.brief.frames_hour,
   retries: (n, d) => d.brief.retry_rate ?? -1,
   rssi: (n, d) => d.brief.rssi_avg ?? -999,
@@ -189,7 +215,7 @@ function diagTable() {
     const fresh = document.querySelector('#view input');
     if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
   });
-  const columns = [['status', 'diag.col.health'], ['name', 'diag.col.node'], ['role', 'col.role'], [null, 'diag.col.state'],
+  const columns = [['status', 'diag.col.health'], ['name', 'diag.col.node'], ['role', 'col.role'], ['version', 'diag.col.version'], [null, 'diag.col.state'],
     ['frames', 'diag.col.frames'], ['retries', 'diag.col.retries'], ['rssi', 'diag.col.rssi'], ['timing', 'diag.col.timing'],
     ['children', 'diag.col.children'], ['heard', 'diag.col.heard'], ['findings', 'diag.col.findings']];
   const head = h('tr', {}, ...columns.map(([key, label]) => {
@@ -205,8 +231,10 @@ function diagTable() {
     const b = d.brief;
     const timing = b.adv_mean !== null ? `${fmtDuration(b.adv_mean)} ${t('diag.adv.short')}` : b.poll_mean !== null ? `${fmtDuration(b.poll_mean)} ${t('diag.poll.short')}` : '–';
     return h('tr', { class: `row${n.online ? '' : ' offline'}`, onclick: () => openDiagNode(n.id) },
-      h('td', {}, healthDot(d.status)), h('td', {}, nodeName(n), n.border_router ? [' ', abbr('BR')] : null),
-      h('td', {}, roleChip(n.role)), h('td', {}, n.online_indirect ? t('online.indirect') : t(n.online ? 'online' : 'offline')),
+      h('td', {}, healthDot(d.status)), h('td', {}, nodeName(n), n.border_router ? [' ', abbr('BR')] : null,
+        n.diag_self ? [' ', h('span', { class: 'tag', title: t('diag.self.tip') }, t('diag.self'))] : null),
+      h('td', {}, roleChip(n.role)), h('td', {}, fmtThreadVersion(n.version)),
+      h('td', {}, n.online_indirect ? t('online.indirect') : t(n.online ? 'online' : 'offline')),
       h('td', { class: 'num' }, String(b.frames_hour)), h('td', { class: 'num' }, fmtPct(b.retry_rate)),
       h('td', { class: 'num' }, b.rssi_avg === null ? '–' : fmtDbm(b.rssi_avg)), h('td', { class: 'num' }, timing),
       h('td', { class: 'num' }, n.role === 'router' || n.role === 'leader' ? String(b.children) : ''),
@@ -223,7 +251,8 @@ function renderDiagOverview() {
     h('div', { class: 'diag-head' }, h('h2', {}, t('view.diag')), sevChip(state.diag.summary.status),
       h('a', { class: 'btnlink', href: '/api/export/nodes.csv', download: 'thread-tree-nodes.csv' }, t('diag.export.csv'))),
     overviewCards(state.diag.summary),
-    section('diag.findings.title', findingList(findings), h('p', { class: 'muted small' }, t('diag.note.passive'))),
+    section('diag.findings.title', findingList(findings),
+      h('p', { class: 'muted small' }, t(state.diag.summary.active && state.diag.summary.active.enabled ? 'diag.note.active' : 'diag.note.passive'))),
     section('diag.nodes.title', diagTable()));
 }
 
@@ -278,21 +307,48 @@ function timingSection(d) {
   return section('diag.sec.timing', h('div', { class: 'tiles' }, ...tiles));
 }
 
+const lossCell = pct => h('td', { class: `num${pct !== null && pct !== undefined && pct >= LINK_LOSS_HIGH ? ' loss-high' : ''}` }, fmtPercentValue(pct));
+
 function linksSection(d) {
   if (!d.links.length) return d.role === 'router' || d.role === 'leader'
     ? section('diag.sec.links', h('p', { class: 'muted' }, t('diag.links.none'))) : null;
+  const measured = d.links.some(l => l.metrics);  // columns of the routers' own measurements only if there are any
   const rows = d.links.map(l => {
-    const nb = l.neighbor;
+    const nb = l.neighbor, m = l.metrics;
     const who = nb && !nb.placeholder ? nodeLinkTo(nb.id, nb.name || (nb.ext ? '…' + fmtMac(nb.ext).slice(-11) : nb.rloc16)) :
       h('span', { class: 'muted' }, `${t('placeholder.router')} ${routerLabel(l.neighbor_router_id)}`);
     return h('tr', { class: l.stale ? 'offline' : null }, h('td', {}, who),
       h('td', {}, t(l.reported_by === 'self' ? 'diag.link.self' : 'diag.link.neighbor_rep')),
       h('td', {}, h('span', { class: 'lqpair' }, lqMeter(l.lq_in), ` ${l.lq_in} / `, lqMeter(l.lq_out), ` ${l.lq_out}`)),
-      h('td', { class: 'num' }, String(l.cost)), h('td', {}, fmtDuration(l.age), l.stale ? [' ', h('span', { class: 'tag' }, t('link.stale'))] : null));
+      h('td', { class: 'num' }, fmtCost(l.cost)), h('td', {}, fmtDuration(l.age), l.stale ? [' ', h('span', { class: 'tag' }, t('link.stale'))] : null),
+      measured ? [h('td', { class: 'num' }, m ? fmtDbm(m.rss_ave) : '–'), h('td', { class: 'num' }, m ? fmtDb(m.margin) : '–'),
+        lossCell(m ? m.frame_err : null), lossCell(m ? m.msg_err : null), h('td', { class: 'num' }, m ? fmtDuration(m.conn_time) : '–')] : null);
   });
+  const heads = ['diag.link.neighbor', 'diag.link.reported', 'diag.link.quality', 'diag.link.cost', 'diag.link.age',
+    ...(measured ? ['diag.link.signal', 'diag.link.margin', 'diag.link.frames', 'diag.link.msgs', 'diag.link.conn'] : [])];
   return section('diag.sec.links', h('div', { class: 'tablewrap' }, h('table', {},
-    h('thead', {}, h('tr', {}, ...['diag.link.neighbor', 'diag.link.reported', 'diag.link.quality', 'diag.link.cost', 'diag.link.age'].map(k => h('th', {}, t(k))))),
-    h('tbody', {}, rows))));
+    h('thead', {}, h('tr', {}, ...heads.map(k => h('th', { title: k === 'diag.link.margin' ? t('diag.l.margin.tip') : null }, t(k))))),
+    h('tbody', {}, rows))), measured ? h('p', { class: 'muted small' }, t('diag.link.note')) : null);
+}
+
+// the parent router's measurements of an end device (active diagnostics)
+function parentLinkSection(d) {
+  const k = d.link;
+  if (!k) return null;
+  const off = v => (v ? fmtDuration(v) : t('diag.l.off'));
+  const last = k.rss_last === null || k.rss_last === undefined ? '' : ` (${t('diag.l.last')}: ${fmtDbm(k.rss_last)})`;
+  return section('diag.sec.parentlink',
+    h('div', { class: 'tiles' },
+      tile([abbr('RSS'), ' ', t('diag.l.rss')], fmtDbm(k.rss_ave), t('diag.l.rss.tip') + last),
+      tile(t('diag.l.margin'), fmtDb(k.margin), t('diag.l.margin.tip')),
+      tile(t('diag.l.frame'), fmtPercentValue(k.frame_err), t('diag.l.frame.tip')),
+      tile(t('diag.l.msg'), fmtPercentValue(k.msg_err), t('diag.l.msg.tip')),
+      tile(t('diag.l.age'), fmtDuration(k.age), t('diag.l.age.tip')),
+      tile(t('diag.l.timeout'), fmtDuration(k.timeout)),
+      tile(t('diag.l.conn'), fmtDuration(k.conn_time)),
+      tile(t('diag.l.queued'), k.queued === null || k.queued === undefined ? '–' : String(k.queued), t('diag.l.queued.tip')),
+      tile(t('diag.l.supervision'), off(k.supervision), t('diag.l.supervision.tip'))),
+    h('p', { class: 'muted small' }, fillTemplate(t('diag.note.parentlink'), { ago: ago(k.ts) }, (key, v) => v)));
 }
 
 function parentSection(d) {
@@ -306,10 +362,18 @@ function parentSection(d) {
 
 function childrenSection(d) {
   if (!d.children.length) return null;
-  const rows = d.children.map(c => h('tr', { class: c.online ? null : 'offline' },
-    h('td', {}, nodeLinkTo(c.id, c.name || (c.ext ? '…' + fmtMac(c.ext).slice(-11) : c.rloc16))), h('td', {}, roleChip(c.role)),
-    h('td', { class: 'mono' }, c.rloc16 || '–'), h('td', {}, t(c.online ? 'online' : 'offline'))));
-  return section('diag.sec.children', h('div', { class: 'tablewrap' }, h('table', {}, h('tbody', {}, rows))));
+  const measured = d.children.some(c => c.link);  // the parent's own measurements, if the active diagnostics have them
+  const rows = d.children.map(c => {
+    const k = c.link;
+    return h('tr', { class: c.online ? null : 'offline' },
+      h('td', {}, nodeLinkTo(c.id, c.name || (c.ext ? '…' + fmtMac(c.ext).slice(-11) : c.rloc16)), c.diag_self ? [' ', h('span', { class: 'tag' }, t('diag.self'))] : null),
+      h('td', {}, roleChip(c.role)), h('td', { class: 'mono' }, c.rloc16 || '–'), h('td', {}, t(c.online ? 'online' : 'offline')),
+      measured ? [h('td', {}, fmtThreadVersion(c.version)), h('td', { class: 'num' }, k ? fmtDbm(k.rss_ave) : '–'),
+        lossCell(k ? k.frame_err : null), h('td', { class: 'num' }, k ? fmtDuration(k.age) : '–')] : null);
+  });
+  const head = measured ? h('thead', {}, h('tr', {}, ...['diag.children.device', 'col.role', 'col.rloc16', 'd.state', 'diag.col.version', 'diag.link.signal', 'diag.link.frames', 'diag.l.age'].map(k => h('th', {}, t(k))))) : null;
+  return section('diag.sec.children', h('div', { class: 'tablewrap' }, h('table', {}, head, h('tbody', {}, rows))),
+    measured ? h('p', { class: 'muted small' }, t('diag.children.note')) : null);
 }
 
 function historySection(d) {
@@ -330,14 +394,18 @@ function renderNodeDiag() {
     h('dt', {}, t('col.partition')), h('dd', {}, d.partition_id === null ? '–' : `0x${d.partition_id.toString(16)}`),
     h('dt', {}, t('d.state')), h('dd', {}, d.online_indirect ? t('online.indirect') : t(d.online ? 'online' : 'offline')),
     h('dt', {}, t('d.first')), h('dd', {}, ago(d.first_seen)), h('dt', {}, t('d.last')), h('dd', {}, ago(d.last_seen)),
-    h('dt', {}, t('diag.t.heard')), h('dd', {}, d.heard ? ago(d.last_heard) : t('reach.indirect')));
+    h('dt', {}, t('diag.t.heard')), h('dd', {}, d.heard ? ago(d.last_heard) : t('reach.indirect')),
+    d.version !== null && d.version !== undefined ? [h('dt', {}, t('d.version')), h('dd', {}, fmtThreadVersion(d.version))] : [],
+    d.vendor ? [h('dt', {}, t('d.vendor')), h('dd', {}, [d.vendor.name, d.vendor.model].filter(Boolean).join(' · ') || '–', d.vendor.sw ? ` (${d.vendor.sw})` : '')] : [],
+    d.last_diag ? [h('dt', {}, t('d.diag')), h('dd', {}, ago(d.last_diag))] : []);
   return h('div', { class: 'diag' },
-    h('div', { class: 'diag-head' }, back, h('h2', {}, title), roleChip(d.role), d.border_router ? abbr('BR') : null, sevChip(d.status),
+    h('div', { class: 'diag-head' }, back, h('h2', {}, title), roleChip(d.role), d.border_router ? abbr('BR') : null,
+      d.diag_self ? h('span', { class: 'tag', title: t('diag.self.tip') }, t('diag.self')) : null, sevChip(d.status),
       n ? h('button', { type: 'button', onclick: () => { state.view = 'tree'; state.selected = d.id; render(); } }, t('diag.show_in_tree')) : null,
       h('a', { class: 'btnlink', href: `/api/nodes/${encodeURIComponent(d.id)}/diagnostics`, download: `thread-tree-${d.id}.json` }, t('diag.export.json'))),
     facts,
     d.findings.length ? section('diag.findings.title', d.findings.map(f => findingRow(f, null))) : null,
-    signalSection(d), trafficSection(d), timingSection(d), linksSection(d), parentSection(d), childrenSection(d),
+    signalSection(d), trafficSection(d), timingSection(d), linksSection(d), parentSection(d), parentLinkSection(d), childrenSection(d),
     historySection(d),
     section('diag.sec.addresses', d.addresses.length ? addressList({ addresses: d.addresses }, false) : h('p', { class: 'muted' }, '–')));
 }

@@ -5,9 +5,13 @@ A single 802.15.4 sniffer (nRF52840 or ESP32-C6/H2) listens on the Thread channe
 turns the decrypted traffic into a tree of **leader → routers → end devices** with roles,
 all IPv6 addresses per node (a border router shows several), and router link quality.
 No Home Assistant, no changes to your network. UI in English and German, with a legend for every abbreviation.
+Optionally a second nRF52840 joins as an end device and *asks* the network what the routers measure themselves
+(Thread versions, MAC addresses of all children, signal and error rates of every link, manufacturer): see
+[Active diagnostics](#active-diagnostics-optional).
 
-**Status: v0.1, engine and UI are implemented and unit-tested with synthetic data. The tshark
-adapter has not yet been run against a real capture (see "Verification status").**
+**Status: v0.1. The passive pipeline (nRF52840 sniffer, tshark, engine, UI) has run on a real network (Raspberry Pi,
+IKEA DIRIGERA); the active diagnostics are tested against recorded real output and a simulated stick, not yet live on
+hardware (see "Verification status").**
 
 ## Quick start
 
@@ -25,6 +29,7 @@ python3 -m thread_tree run --source iface:<nrf-sniffer-interface>
 python3 -m thread_tree run --source pcap:capture.pcapng   # replay
 python3 -m thread_tree run --source cmd:"your-esp32-sniffer-bridge --port /dev/ttyACM0"  # writes pcap to stdout
 python3 -m thread_tree dataset                            # decode a dataset (prints no secrets)
+python3 -m thread_tree run --source nrf:/dev/ttyACM0 --diag-port /dev/serial/by-id/<CLI stick>   # + active diagnostics
 ```
 
 **Thread dataset.** It provides the network key (needed to decrypt), the channel (used by `nrf:`), the PAN ID filter
@@ -72,17 +77,20 @@ findings. A coloured dot on a card in the tree marks nodes with a warning or cri
 - **Overview:** devices online/offline, router count (limit 32), partitions, border routers, router links (current, stale,
   quality), last frame / decryption rate of the capture, observation start; the findings of the network and of all
   devices (warnings and critical ones open, plain notes folded away); a sortable, filterable table with frames per hour,
-  retransmissions, RSSI, advertisement or poll interval, children, last heard. CSV export of that table.
+  retransmissions, RSSI, advertisement or poll interval, children, last heard (and the Thread version with active
+  diagnostics). CSV export of that table.
 - **Device page** (click a row, or "Open diagnosis" in the detail panel): findings with an explanation and what to do;
   signal (RSSI average/min/max, LQI, 24 h chart with the weak threshold, distribution); traffic (frames by kind,
   retransmissions, data volume, frames other devices addressed to it, 24 h activity chart); timing (advertisement or poll
-  interval); router links with quality in/out; parent or children; history of events; addresses; JSON download.
+  interval); router links with quality in/out (with active diagnostics also the signal and loss the routers measure);
+  parent or children; history of events; addresses; JSON download.
 - **History** (kept 30 days, 200 per device): first seen, role, parent (with the short address that came with it), short
   address, partition, border router, online/offline, MAC address learned.
 
-All of it is measured **at the sniffer**: RSSI/LQI are what the sniffer received, retransmissions are repeated frames it
-heard (same sequence number to the same destination within 0.5 s), "frames/h" counts what reached it. A device far from
-the sniffer looks weak and quiet without being so; findings are hints, not proof.
+All of it, except the values marked as active diagnostics, is measured **at the sniffer**: RSSI/LQI are what the sniffer
+received, retransmissions are repeated frames it heard (same sequence number to the same destination within 0.5 s),
+"frames/h" counts what reached it. A device far from the sniffer looks weak and quiet without being so; findings are
+hints, not proof.
 
 | Finding | Severity | When |
 |---|---|---|
@@ -99,6 +107,10 @@ the sniffer looks weak and quiet without being so; findings are hints, not proof
 | Network: sniffer silent, decryption failing | critical | no frame for 60 s while capturing / more failures than successes |
 | Network: partitions, leader changes, many offline, router limit | warning | |
 | Network: no / single border router, near the router limit | note | |
+| Active: router loses frames to a neighbour | warning | the router could not deliver 25 % of its frames (or 5 % of its messages) to a neighbour |
+| Active: poor link to its parent | note / warning | parent hears it at -90 dBm or weaker, or loses 25 % of the frames (5 % of the messages: warning) |
+| Active: parent has not heard it for a long time, router does not answer detail queries | notes | 80 % of the child timeout; usually an older Thread stack |
+| Active: not heard directly, confirmed by diagnostics; diagnostics not working | note / warning | |
 
 The thresholds are constants at the top of `thread_tree/diagnose.py`. API: `/api/diagnostics` (summary and findings),
 `/api/nodes/<id>/diagnostics` (device page as JSON), `/api/export/nodes.csv`; `/api/topology` carries a `health` per node.
@@ -127,17 +139,34 @@ The thresholds are constants at the top of `thread_tree/diagnose.py`. API: `/api
 | MAC address (EUI-64) | transmitter/destination of frames; links a short address to its MAC when a parent answers a child's attach request (Child ID Response: destination MAC + assigned Address16) |
 | Reception: direct / indirect | direct = the sniffer received a frame transmitted by that node itself; indirect = known only from others' traffic (out of range) |
 | Link-local, RLOC, ALOC | derived from EUI-64 / RLOC16 / mesh-local prefix (marked "derived") |
-| ML-EID, OMR/GUA | Address Registration of children, Address Notification (marked "observed") |
+| ML-EID, OMR/GUA | Address Registration of children, Address Notification (marked "observed"); with active diagnostics also the routers' and children's own address lists |
+| Thread version, manufacturer / model, signal and loss of links, child MAC addresses | active diagnostics only (`meshdiag`, `networkdiagnostic`), see below |
 
 Limits: only what the sniffer hears; sleepy devices appear slowly; a REED cannot be told from a FED;
 router-to-router links need that router's advertisement to reach the sniffer.
 
-## Active diagnostics (in progress)
+## Active diagnostics (optional)
 
-A second nRF52840 with OpenThread CLI firmware can join as end device and ask the network directly (routers, children
-with MAC and IPv6 addresses, vendor/model). Plan, firmware build (GitHub Actions, no local toolchain) and the
-Phase 0 test tool (`python3 -m thread_tree diag-probe`): [docs/diagnostics.md](docs/diagnostics.md). A prebuilt firmware is
-in the [releases](https://github.com/thomasjanker/thread-tree/releases/tag/firmware-diag-2026-10-03) (pre-release).
+A second nRF52840 with OpenThread CLI firmware joins the network as an **end device** (router role disabled: no router ID,
+no influence on routing) and asks it: every router with Thread version, MAC and IPv6 addresses and links in both
+directions, the signal and error rates the routers measure for each neighbour, all children with MAC addresses and the
+parent's view of each link, Network Data, and manufacturer / model where devices answer. This fills in what the sniffer
+cannot hear (devices out of its range, sleepy devices' MAC addresses) and shows weak links by what the routers lost,
+not by what reached the antenna.
+
+```sh
+python3 -m thread_tree diag-probe --list-ports        # find the serial device of the CLI stick
+python3 -m thread_tree run --source nrf:/dev/serial/by-id/<sniffer> --diag-port /dev/serial/by-id/<CLI stick>
+```
+
+Needs the dataset (Settings or `THREAD_TREE_DATASET`) and the diagnostic firmware on the stick (prebuilt in the
+[releases](https://github.com/thomasjanker/thread-tree/releases/tag/firmware-diag-2026-10-03), pre-release; the standard
+prebuilt images lack `meshdiag`). One round every `--diag-interval` seconds (default 300), one request at a time; the
+Diagnosis tab has a card with the state and an "Ask now" button (`POST /api/diagnostics/run`). The node is a participant
+of your network, so it shows up as a device (tag *diagnostic node*), and the stick keeps the dataset in its flash. In
+the first real test the routers with Thread 1.3 did not answer the detail queries: they appear with a note and are asked
+again only after 6 hours. What is asked, what shows where, the findings, how the node joins and the limits:
+[docs/diagnostics.md](docs/diagnostics.md).
 
 ## Limits of passive capture
 
@@ -165,6 +194,11 @@ and a missing one disables only that statistic (with a warning), but they have n
    on a real network yet.
 4. The ESP32-C6 pcap bridge (`cmd:` source). The nRF extcap piping (`--fifo /dev/stdout` into `tshark -r -`) was confirmed
    on a Raspberry Pi 2: frames, Thread PAN, RLOC16s and link-local addresses decode as expected.
+5. Active diagnostics: the CLI stick, the firmware, `diag-probe` and the output of `meshdiag` ran on a real network (5
+   routers); the parsers, one collection round, findings and the UI are tested against the anonymized transcript of that
+   run, the joining and the rounds against a simulated stick (pseudo terminal). Not yet run live together with the sniffer
+   (`run --diag-port`), and no real answer to `networkdiagnostic get ... 25 26 27 28` (manufacturer, model) has been
+   recorded: the parser follows OpenThread's source.
 
 First hardware step: capture a few minutes with the sniffer, run `tshark -r cap.pcapng -T ek` by hand
 next to `thread-tree run --source pcap:cap.pcapng`, and compare.
@@ -181,7 +215,12 @@ thread_tree/topology.py   snapshot + spanning tree (leader root, best-LQ router 
 thread_tree/ek.py         tshark EK -> engine calls (field table)
 thread_tree/capture.py    pcap / interface / command / EK sources
 thread_tree/store.py      SQLite persistence
-thread_tree/runtime.py    capture lifecycle + dataset (UI/CLI), private dataset file
+thread_tree/runtime.py    capture and diagnostics lifecycle + dataset (UI/CLI), private dataset file
+thread_tree/otcli.py      serial client for the OpenThread CLI (one command at a time, cancellable)
+thread_tree/otdiag.py     parsers for meshdiag / netdata / leaderdata output (tested on a real transcript)
+thread_tree/collector.py  active diagnostics: join as end device, rounds of questions, engine updates
+thread_tree/diagprobe.py  diag-probe: what can the stick ask? (transcript without secrets)
+thread_tree/simulate.py   demo network incl. simulated active diagnostics
 thread_tree/server.py     stdlib HTTP: topology, diagnostics, export, config, static UI
 thread_tree/web/          vanilla JS UI (tree, mesh, table, diagnosis views, charts, legend, en/de)
 ```

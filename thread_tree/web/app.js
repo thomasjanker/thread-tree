@@ -158,7 +158,7 @@ function renderMesh(p) {
     seen.add(key);
     const lq = Math.max(l.lq_in, l.lq_out);
     const line = s('line', { class: `edge ${l.stale ? 'unknown' : 'link'}`, x1: a.x, y1: a.y, x2: b.x, y2: b.y, 'stroke-width': 1 + lq, opacity: lq && !l.stale ? 1 : .3 });
-    line.append(s('title', {}, `${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${l.cost}${l.stale ? ' — ' + t('link.stale') : ''}`));
+    line.append(s('title', {}, `${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${fmtCost(l.cost)}${l.stale ? ' — ' + t('link.stale') : ''}`));
     svg.append(line);
   }
   for (const n of routers) {
@@ -246,6 +246,7 @@ function renderDrawer() {
   const mode = n.ftd == null ? '—' : [n.ftd ? 'FTD' : 'MTD', n.rx_on_idle ? 'rx-on-idle' : 'rx-off-idle'];
   fill(d,
     h('h2', {}, nodeName(n), roleChip(n.role), n.border_router ? abbr('BR') : null,
+      n.diag_self ? h('span', { class: 'tag', title: t('diag.self.tip') }, t('diag.self')) : null,
       h('button', { type: 'button', style: 'margin-left:auto', onclick: () => select(null), 'aria-label': t('legend.close') }, '×')),
     nameEditor(n),
     n.placeholder ? null : h('p', {}, h('button', { type: 'button', onclick: () => openDiagNode(n.id) }, t('diag.open'))),
@@ -256,6 +257,8 @@ function renderDrawer() {
       dd(h('span', {}, abbr('MAC', t('d.mac')), ' / ', abbr('EUI-64')), macCell(n)),
       dd(abbr('RLOC16'), h('span', { class: 'mono' }, n.rloc16 || '—')),
       dd(t('d.mode'), Array.isArray(mode) ? [abbr(mode[0]), ' · ' + mode[1]] : mode),
+      n.version != null ? dd(t('d.version'), fmtThreadVersion(n.version)) : [],
+      n.vendor ? dd(t('d.vendor'), [n.vendor.name, n.vendor.model].filter(Boolean).join(' · ') + (n.vendor.sw ? ` (${n.vendor.sw})` : '')) : [],
       dd(t('col.partition'), '0x' + Number(n.partition_id).toString(16)),
       n.parent ? dd(t('d.parent'), nodeLink(n.parent)) : [],
       dd(t('d.reach'), reachLabel(n), n.heard ? ` (${ago(n.last_heard)})` : ''),
@@ -263,7 +266,7 @@ function renderDrawer() {
       dd(h('span', { title: t('d.addressed.tip') }, t('d.addressed')), ago(n.last_addressed))),
     tn && tn.children.length ? [h('h3', {}, t('d.children')), h('div', {}, tn.children.map(c => h('div', {}, nodeLink(c.id))))] : [],
     links.length ? [h('h3', {}, t('d.neighbors')), ...links.map(l => h('div', {}, neighborLabel(n, l, nodeLink),
-      ` — ${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${l.cost}`,
+      ` — ${t('link.in')} ${l.lq_in} / ${t('link.out')} ${l.lq_out} / ${t('link.cost')} ${fmtCost(l.cost)}`,
       l.stale ? h('span', { class: 'tag' }, t('link.stale')) : null))] : [],
     h('h3', {}, t('d.addresses')), ...(n.addresses.length ? addressList(n, false) : [h('div', { class: 'muted' }, '—')]));
 }
@@ -281,7 +284,8 @@ function renderLegend() {
       [h('span', { class: 'tag reach-indirect' }, t('reach.indirect')), h('span', {}, t('legend.indirect'))],
       [h('span', { class: 'tag reach-direct' }, t('reach.direct')), h('span', {}, t('legend.direct'))],
       [h('span', { class: 'tag' }, t('online.indirect')), h('span', {}, t('online.indirect.tip'))],
-      [h('span', { class: 'dot dot-warn' }), h('span', {}, t('legend.health'))]),
+      [h('span', { class: 'dot dot-warn' }), h('span', {}, t('legend.health'))],
+      [h('span', { class: 'tag' }, t('diag.self')), h('span', {}, t('diag.self.tip'))]),
     h('h3', {}, t('legend.edges')),
     grid([h('span', { class: 'chip', style: 'background:var(--router)' }, '━'), t('legend.edge.link')],
       [h('span', { class: 'chip', style: 'background:var(--line);color:var(--text)' }, '─'), t('legend.edge.child')],
@@ -411,6 +415,7 @@ function render() {
   if (st?.mode === 'run' && st.waiting_for_dataset) { msg = t('banner.waiting'); settingsLink = true; }
   const sx = st?.stats || {};
   if (st?.mode === 'run' && sx.mle_failed > 0 && sx.mle_failed >= sx.mle_ok) { msg = t('banner.decrypt'); settingsLink = true; }
+  if (st?.diagnostics_error && !msg) { msg = t('banner.diag') + st.diagnostics_error; settingsLink = false; }
   if (st?.capture_error) { msg = t('banner.error') + st.capture_error; settingsLink = false; }
   if (state.notice) { msg = state.notice.text; settingsLink = false; }
   banner.hidden = !msg;

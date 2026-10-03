@@ -154,6 +154,21 @@ class OtCliTests(unittest.TestCase):
         with Device(noisy=True) as d:
             self.assertEqual(d.cli.command("eui64"), ["a4c138fffe109999"])
 
+    def test_a_secret_never_appears_in_error_messages(self):
+        with Device() as d:
+            with self.assertRaises(OtCliError) as ctx:
+                d.cli.command("bogus " + KEY, secret=True)             # the device answers 'Error 35'
+            self.assertNotIn(KEY, str(ctx.exception))
+            self.assertNotIn(KEY, ctx.exception.command)
+            d.fake.stop()
+            d.fake.join(timeout=2)
+            with self.assertRaises(OtCliTimeout) as timed_out:
+                d.cli.command("dataset set active " + KEY, timeout=0.3, secret=True)
+            self.assertNotIn(KEY, str(timed_out.exception))
+            with self.assertRaises(OtCliTimeout) as plain:               # without the flag the command is shown
+                d.cli.command("state", timeout=0.3)
+            self.assertIn("state", str(plain.exception))
+
     def test_commands_come_from_help(self):
         with Device(commands=["help", "state", "version"]) as d:
             self.assertEqual(d.cli.commands(), {"help", "state", "version"})
@@ -194,6 +209,25 @@ class ProbeTests(unittest.TestCase):
         self.assertFalse(summary["capabilities"]["meshdiag"])
         self.assertIn("NO DIAGNOSTIC COMMANDS", text)
         self.assertIn("# command meshdiag: NO", text)
+
+    def test_meshdiag_firmware_also_asks_a_few_routers_for_vendor_data(self):
+        with Device() as d:
+            d.fake.reply_orig = d.fake.reply
+            d.fake.reply = lambda cmd: (["fdae:fba2:cf3f:f1d3:0:ff:fe00:5801", "fe80:0:0:0:1:2:3:4"] if cmd == "ipaddr"
+                                        else ["5801"] if cmd == "rloc16" else d.fake.reply_orig(cmd))
+            summary, text = probe(d)
+            received = d.fake.received
+        self.assertIn("networkdiagnostic get fdae:fba2:cf3f:f1d3:0:ff:fe00:1400 23 24 25 26 27 28", received)
+        self.assertIn("# --- vendor information (networkdiagnostic) ---", text)
+        self.assertLessEqual(len([c for c in received if c.startswith("networkdiagnostic get")]), 4)  # a few, not all
+
+    def test_mesh_prefix_comes_from_the_own_rloc_address(self):
+        from thread_tree.diagprobe import _mesh_prefix
+        lines = ["fdc2:f44c:29d0:1:c111:2068:82c7:a8b4", "fdae:fba2:cf3f:f1d3:0:ff:fe00:a804", "fe80:0:0:0:8cfb:728:fcee:b114"]
+        self.assertEqual(_mesh_prefix(lines, 0xA804), 0xFDAEFBA2CF3FF1D3)
+        self.assertIsNone(_mesh_prefix(lines, 0x1234))              # an RLOC of someone else
+        self.assertIsNone(_mesh_prefix(["fe80::1"], None))
+        self.assertIsNone(_mesh_prefix(None, None))
 
     def test_networkdiagnostic_only_firmware_queries_each_router_by_rloc_address(self):
         cmds = [c for c in HELP if c != "meshdiag"]

@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 from .capture import DEFAULT_EXTCAP_SCRIPT, CaptureThread, nrf_command
-from .dataset import Dataset, parse_dataset
+from .collector import DiagThread
+from .dataset import Dataset, normalize_hex, parse_dataset
 from .engine import Engine
 
 log = logging.getLogger(__name__)
@@ -25,13 +26,21 @@ class ConfigLocked(Exception):
     """Dataset cannot be changed from the UI."""
 
 
+class DiagUnavailable(Exception):
+    """Active diagnostics are not set up (no --diag-port)."""
+
+
 class Controller:
     def __init__(self, engine: Engine, mode: str, source: str = "", channel: int | None = None,
                  dataset_path: Path | None = None, cli_dataset: str | None = None,
                  cli_key: str | None = None, tshark: str = "tshark", extra: list[str] | None = None,
                  extcap_script: str = DEFAULT_EXTCAP_SCRIPT, editable: bool = True,
-                 locked_reason: str | None = None, allow_remote_config: bool = False):
+                 locked_reason: str | None = None, allow_remote_config: bool = False,
+                 diag_port: str | None = None, diag_interval: float = 300.0, diag_options: dict | None = None):
         self.engine, self.mode, self.source, self.channel = engine, mode, source, channel
+        self.diag_port, self.diag_interval, self.diag_options = diag_port, diag_interval, diag_options or {}
+        self.diag: DiagThread | None = None
+        self._dataset_hex: str | None = None  # the raw dataset for the diagnostic node: contains the key, never leaves here
         self.path, self.tshark, self.extra, self.extcap_script = dataset_path, tshark, extra, extcap_script
         self.cli_key = cli_key
         self.allow_remote_config = allow_remote_config  # UI may change the dataset from other machines
@@ -43,10 +52,13 @@ class Controller:
         self.waiting = False
         if cli_dataset:
             self.dataset, self.origin = parse_dataset(cli_dataset), "cli"
+            self._dataset_hex = normalize_hex(cli_dataset)
             self.editable, self.locked_reason = False, "cli"
         elif self.path and self.path.is_file():
             try:
-                self.dataset, self.origin = parse_dataset(self.path.read_text().strip()), "ui"
+                text = self.path.read_text().strip()
+                self.dataset, self.origin = parse_dataset(text), "ui"
+                self._dataset_hex = normalize_hex(text)
             except (ValueError, OSError) as exc:
                 log.error("stored dataset unusable (%s): ignoring it", exc)
         self._apply_prefix()
@@ -86,11 +98,13 @@ class Controller:
             raise ValueError(f"dataset channel {ds.channel} is not a valid Thread channel")
         with self.lock:
             if self.path:
-                self._write_private("".join(hex_tlvs.split()).lower())
+                self._write_private(normalize_hex(hex_tlvs))
             self.dataset, self.origin = ds, "ui"
+            self._dataset_hex = normalize_hex(hex_tlvs)
             self._apply_prefix()
             self.engine.dirty = True
             self.restart_capture()
+            self.restart_diagnostics()
             return self.config()
 
     def clear_dataset(self) -> dict:
@@ -99,11 +113,12 @@ class Controller:
         with self.lock:
             if self.path and self.path.exists():
                 self.path.unlink()
-            self.dataset, self.origin = None, None
+            self.dataset, self.origin, self._dataset_hex = None, None, None
             with self.engine.lock:
                 self.engine.fixed_ml_prefix = None  # do not keep classifying with the removed network's prefix
                 self.engine.dirty = True
             self.restart_capture()
+            self.restart_diagnostics()
             return self.config()
 
     def _write_private(self, text: str) -> None:
@@ -150,11 +165,51 @@ class Controller:
         self.stop_capture()
         self.start_capture()
 
+    # ---- active diagnostics -------------------------------------------------
+
+    def start_diagnostics(self) -> None:
+        """Start the node that joins the network and asks it (only with --diag-port, never in demo mode)."""
+        if self.mode != "run" or not self.diag_port:
+            return
+        with self.lock:
+            self.stop_diagnostics()
+            self.diag = DiagThread(self.engine, self.diag_port, self._dataset_hex, self.diag_interval,
+                                   **self.diag_options)
+            self.diag.start()
+
+    def stop_diagnostics(self) -> None:
+        with self.lock:
+            if self.diag is not None:
+                self.diag.stop()
+                self.diag.join(timeout=10)
+                self.diag = None
+                with self.engine.lock:
+                    self.engine.diag_info = {}
+
+    def restart_diagnostics(self) -> None:
+        """A new dataset means joining again with it (or waiting for one)."""
+        if self.diag is not None:
+            self.start_diagnostics()
+
+    def run_diagnostics(self) -> dict:
+        """Ask for a round now. Returns at once: the answers arrive within seconds to a minute."""
+        with self.lock:
+            if self.mode == "demo":
+                from .simulate import refresh_active
+                refresh_active(self.engine, time.time())
+                return {"queued": True}
+            if self.diag is None:
+                raise DiagUnavailable("active diagnostics are not set up: start with --diag-port")
+            self.diag.trigger()
+            return {"queued": True}
+
     def rebuild_topology(self) -> dict:
         result = self.engine.reset_topology()
         if self.mode == "demo":  # nothing would refill the simulated network
             from .simulate import populate
-            populate(self.engine)
+            populate(self.engine, active=True)
+        elif self.diag is not None:  # what was cleared comes back with the next round
+            self.diag.trigger()
         return result
 
     # ---- status -------------------------------------------------------------
@@ -163,6 +218,9 @@ class Controller:
         with self.lock:
             cap = self.capture
             ds = self.dataset
+            with self.engine.lock:
+                info = self.engine.diag_info
+                diag_error = info.get("error") if info.get("state") == "error" else None
             return {
                 "mode": self.mode, "capture_error": cap.error if cap else None,
                 "capture_running": bool(cap and not cap.finished.is_set()),
@@ -171,4 +229,5 @@ class Controller:
                 "channel": (self.channel or (ds.channel if ds else None)),
                 "decrypting": bool(self.key), "time": time.time(),
                 "stats": dict(cap.stats) if cap else {},
+                "diagnostics": self.mode == "demo" or self.diag is not None, "diagnostics_error": diag_error,
             }

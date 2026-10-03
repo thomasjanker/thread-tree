@@ -29,6 +29,29 @@ function fmtDbm(x) {
   return x === null || x === undefined ? '–' : `${Math.round(x)} dBm`;
 }
 
+// route cost of a link: unknown (null) while only the active diagnostics have described it
+function fmtCost(c) {
+  return c === null || c === undefined ? '–' : String(c);
+}
+
+function fmtDb(x) {
+  return x === null || x === undefined ? '–' : `${Math.round(x)} dB`;
+}
+
+// a share that is already given in percent (the routers report their error rates that way); small values keep a decimal
+function fmtPercentValue(p) {
+  if (p === null || p === undefined) return '–';
+  if (p < 0.05) return '0 %';
+  return `${p < 9.95 ? p.toFixed(1) : p.toFixed(0)} %`;
+}
+
+// the version number devices report (4 = Thread 1.3) as the name people know
+const THREAD_VERSIONS = { 1: '1.0', 2: '1.1', 3: '1.2', 4: '1.3', 5: '1.4' };
+function fmtThreadVersion(v) {
+  if (v === null || v === undefined) return '–';
+  return THREAD_VERSIONS[v] ?? `v${v}`;
+}
+
 // "{name}" placeholders; format(key, value) turns a value into text, unknown placeholders stay visible.
 // "{count:device|devices}" adds the singular or plural word after the number.
 function fillTemplate(template, params, format) {

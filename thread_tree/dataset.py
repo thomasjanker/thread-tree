@@ -24,8 +24,13 @@ class Dataset:
         return None if self.mesh_local_prefix is None else prefix_str(self.mesh_local_prefix)
 
 
+def normalize_hex(hex_tlvs: str) -> str:
+    """Hex TLVs without spaces and colons, lower case: the form `dataset set active` takes."""
+    return "".join(hex_tlvs.split()).replace(":", "").lower()
+
+
 def parse_dataset(hex_tlvs: str) -> Dataset:
-    raw = bytes.fromhex("".join(hex_tlvs.split()).replace(":", ""))
+    raw = bytes.fromhex(normalize_hex(hex_tlvs))
     ds = Dataset()
     pos = 0
     while pos + 2 <= len(raw):
