@@ -18,6 +18,8 @@ import shlex
 import shutil
 import subprocess
 import threading
+import time
+from collections import deque
 from collections.abc import Iterator
 
 from .dataset import Dataset
@@ -99,12 +101,14 @@ class CaptureThread(threading.Thread):
         self.error: str | None = None
         self.stats: dict[str, int] = {}
         self.finished = threading.Event()
+        self.handler: Handler | None = None
+        self.messages: deque[dict] = deque(maxlen=40)  # what tshark and the sniffer script printed (key masked)
 
     def run(self) -> None:
         try:
             if self.source.startswith("ek:"):
                 with open(self.source[3:], encoding="utf-8") as fh:
-                    handler = Handler(self.engine, {k: v[0] for k, v in FIELDS.items()})
+                    handler = self.handler = Handler(self.engine, {k: v[0] for k, v in FIELDS.items()})
                     self.stats = handler.stats
                     for packet in iter_ek(fh):
                         handler.handle(packet)
@@ -117,14 +121,15 @@ class CaptureThread(threading.Thread):
                                                self.network_key, self.dataset, self.extra)
             stdin = None
             if producer:
-                prod = subprocess.Popen(shlex.split(producer), stdout=subprocess.PIPE)
+                prod = subprocess.Popen(shlex.split(producer), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
                 self._procs.append(prod)
+                threading.Thread(target=self._collect, args=(prod.stderr, "sniffer"), daemon=True).start()
                 stdin = prod.stdout
             log.info("starting tshark (key %s)", "set" if self.network_key else "NOT set: frames stay encrypted")
             proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             self._procs.append(proc)
-            threading.Thread(target=self._log_stderr, args=(proc,), daemon=True).start()
-            handler = Handler(self.engine, chosen)
+            threading.Thread(target=self._collect, args=(proc.stderr, "tshark"), daemon=True).start()
+            handler = self.handler = Handler(self.engine, chosen)
             self.stats = handler.stats
             for packet in iter_ek(proc.stdout):
                 handler.handle(packet)
@@ -132,14 +137,19 @@ class CaptureThread(threading.Thread):
                 raise RuntimeError(f"tshark exited with status {proc.returncode}")
         except Exception as exc:  # surfaced via /api/status
             self.error = str(exc)
+            self.messages.append({"ts": time.time(), "from": "thread-tree", "text": f"capture stopped: {exc}"})
             log.error("capture stopped: %s", exc)
         finally:
             self.finished.set()
 
-    @staticmethod
-    def _log_stderr(proc: subprocess.Popen) -> None:
-        for line in proc.stderr:
-            log.info("tshark: %s", line.rstrip())
+    def _collect(self, stream, source: str) -> None:
+        """Lines a process prints on stderr: into the log and the live view, with anything that looks like a key masked."""
+        from .diagprobe import redact
+        for raw in stream:
+            line = redact((raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw).rstrip(), (self.network_key or "",))
+            if line:
+                self.messages.append({"ts": time.time(), "from": source, "text": line})
+                log.info("%s: %s", source, line)
 
     def stop(self) -> None:
         for p in self._procs:

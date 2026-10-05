@@ -311,12 +311,14 @@ class Engine:
 
     def record_frame(self, ts: float, node: Node | None, kind: str, length: int | None = None,
                      rssi: float | None = None, lqi: float | None = None, seq: int | None = None,
-                     dst: str | None = None) -> None:
-        """Statistics of one frame heard. node is None when the frame has no transmitter address (ACKs)."""
+                     dst: str | None = None) -> bool:
+        """Statistics of one frame heard. node is None when the frame has no transmitter address (ACKs).
+        Returns True if it was a retransmission."""
         if self.last_frame_any is not None and ts - self.last_frame_any > B.SNIFFER_OUTAGE:
             self.sniffer_outages.append((self.last_frame_any, ts))
             del self.sniffer_outages[:-B.OUTAGES_KEPT]
         self.last_frame_any = ts if self.last_frame_any is None else max(self.last_frame_any, ts)
+        retry = False
         if node is not None:
             retry = node.stats.record_frame(ts, kind, length, rssi, lqi, seq, dst)
             if kind == "poll" and not retry:
@@ -330,6 +332,7 @@ class Engine:
         self.capture.record_frame(ts, kind, length, rssi, lqi)
         self.clock = max(self.clock, ts)
         self.dirty = True
+        return bool(node is not None and retry)
 
     def sniffer_was_down(self, start: float, end: float) -> bool:
         return any(s < end and e > start for s, e in self.sniffer_outages)

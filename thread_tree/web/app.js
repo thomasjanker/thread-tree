@@ -2,7 +2,7 @@
 
 const ROLES = ['leader', 'router', 'fed', 'med', 'sed', 'child', 'unknown'];
 const TYPES = ['rloc', 'aloc', 'ml-eid', 'omr', 'link-local'];
-const VIEWS = ['tree', 'mesh', 'table', 'diag', 'tests', 'log'];
+const VIEWS = ['tree', 'mesh', 'table', 'diag', 'tests', 'log', 'live'];
 const state = { notice: null, lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '',
   diag: null, diagNode: null, diagDetail: null, diagFilter: '', diagSort: { key: 'status', dir: -1 },
   folds: {} };  // open / closed state of foldable sections, kept while the page is drawn again
@@ -515,9 +515,9 @@ function render() {
   fill(db, icon('antenna'), h('span', {}, t('header.diag')), h('span', { class: 'track' }, h('span', { class: 'knob' })),
     h('span', { class: 'state' }, t(on ? 'header.diag.state_on' : 'header.diag.state_off')));
   const views = document.getElementById('views');
-  const VIEW_ICONS = { tree: 'tree', mesh: 'mesh', table: 'table', diag: 'diag', tests: 'tests', log: 'log' };
+  const VIEW_ICONS = { tree: 'tree', mesh: 'mesh', table: 'table', diag: 'diag', tests: 'tests', log: 'log', live: 'live' };
   views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', class: 'ibtn', 'aria-selected': String(v === state.view),
-    onclick: () => { state.view = v; render(); if (['diag', 'tests', 'log'].includes(v)) poll(); } }, icon(VIEW_ICONS[v]), h('span', {}, t('view.' + v)))));
+    onclick: () => { state.view = v; render(); if (['diag', 'tests', 'log', 'live'].includes(v)) poll(); } }, icon(VIEW_ICONS[v]), h('span', {}, t('view.' + v)))));
 
   const st = state.status, pe = document.getElementById('status'), banner = document.getElementById('banner');
   let msg = null, settingsLink = false;
@@ -543,11 +543,11 @@ function render() {
   sel.replaceChildren(...topo.partitions.map(p => h('option', { value: p.id, selected: p.id === state.partition }, `${t('partition')} ${p.id.toString(16)} (${Object.values(topo.nodes).filter(n => n.partition_id === p.id && !n.placeholder).length})`)));
   sel.hidden = topo.partitions.length < 2;
   const p = partitionData();
-  if (!['tests', 'log'].includes(state.view) && (!p || Object.values(topo.nodes).filter(n => !n.placeholder).length === 0)) { view.replaceChildren(h('div', { class: 'empty' }, t('empty'))); renderDrawer(); return; }
+  if (!['tests', 'log', 'live'].includes(state.view) && (!p || Object.values(topo.nodes).filter(n => !n.placeholder).length === 0)) { view.replaceChildren(h('div', { class: 'empty' }, t('empty'))); renderDrawer(); return; }
   const scroll = [view.scrollLeft, view.scrollTop];
-  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : state.view === 'table' ? renderTable(p) : state.view === 'tests' ? renderTests() : state.view === 'log' ? renderLog() : renderDiagnose());
+  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : state.view === 'table' ? renderTable(p) : state.view === 'tests' ? renderTests() : state.view === 'log' ? renderLog() : state.view === 'live' ? renderLive() : renderDiagnose());
   [view.scrollLeft, view.scrollTop] = scroll;
-  if (['diag', 'tests', 'log'].includes(state.view)) document.getElementById('drawer').hidden = true;
+  if (['diag', 'tests', 'log', 'live'].includes(state.view)) document.getElementById('drawer').hidden = true;
   else renderDrawer();
 }
 
@@ -559,6 +559,7 @@ async function poll() {
     if (state.view === 'diag') await loadDiagnostics();
     if (state.view === 'tests') await loadTests();
     if (state.view === 'log') await loadLog();
+    if (state.view === 'live') await loadLive();
   } catch (err) {
     statusEl.textContent = '⚠'; statusEl.title = String(err);  // server unreachable
     return;

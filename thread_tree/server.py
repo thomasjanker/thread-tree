@@ -129,6 +129,12 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 return self._json(200, controller.status())
             if path == "/api/tests":
                 return self._json(200, controller.tests())
+            if path == "/api/live":
+                try:
+                    since = int((parse_qs(urlsplit(self.path).query).get("since") or ["0"])[0])
+                except ValueError:
+                    return self._json(400, {"error": "since must be a number"})
+                return self._json(200, controller.live(since))
             if path == "/api/log":
                 query = parse_qs(urlsplit(self.path).query)
                 level = (query.get("level") or [None])[0]
@@ -263,5 +269,11 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
 
     class Server(ThreadingHTTPServer):
         address_family = socket.AF_INET6 if ":" in host else socket.AF_INET
+
+        def handle_error(self, request, client_address):
+            import sys
+            if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError)):
+                return  # the browser closed the connection (page reloaded, tab closed): nothing to report
+            super().handle_error(request, client_address)
 
     return Server((host, port), Handler)

@@ -9,6 +9,7 @@ that feature instead of aborting tshark.
 from __future__ import annotations
 
 import logging
+from collections import deque
 
 from . import addresses as A
 from .engine import Engine
@@ -98,6 +99,8 @@ class Handler:
         # MLE messages seen, and how many could / could not be decrypted
         self.stats = {"frames": 0, "mle_ok": 0, "mle_failed": 0}
         self._last_nwd: tuple | None = None
+        self.recent: deque[dict] = deque(maxlen=500)  # the last frames, for the live view
+        self.seq = 0
 
     def _all(self, layers: dict, logical: str) -> list[str]:
         name = self.fields.get(logical)
@@ -223,14 +226,22 @@ class Handler:
             e.on_frame_counter(ts, sender, counter, self._int(self._one(layers, "key_index")))
         mle_cmd = self._int(self._one(layers, "mle_cmd"))
         addressed = any(v is not None for v in (src64, src16, dst64, dst16))
-        e.record_frame(ts, sender, self._kind(layers, mle_cmd, mac_cmd, addressed), length,
-                       self._number(self._one(layers, "rssi")), self._number(self._one(layers, "lqi")),
-                       self._int(self._one(layers, "seq")),
-                       dst_ext or (f"{dst16:04x}" if dst16 is not None else None))
-        if any(self._present(layers, k) for k in ("mle_no_key", "mle_decrypt_failed", "mle_mic_failed")):
+        kind = self._kind(layers, mle_cmd, mac_cmd, addressed)
+        rssi = self._number(self._one(layers, "rssi"))
+        retry = e.record_frame(ts, sender, kind, length, rssi, self._number(self._one(layers, "lqi")),
+                               self._int(self._one(layers, "seq")),
+                               dst_ext or (f"{dst16:04x}" if dst16 is not None else None))
+        failed = any(self._present(layers, k) for k in ("mle_no_key", "mle_decrypt_failed", "mle_mic_failed"))
+        if failed:
             self.stats["mle_failed"] += 1
         elif mle_cmd is not None:
             self.stats["mle_ok"] += 1
+        self.seq += 1
+        self.recent.append({
+            "seq": self.seq, "ts": ts, "src": sender.id if sender is not None else None,
+            "src16": None if src16 is None else f"0x{src16:04x}", "dst": dst_ext,
+            "dst16": None if dst16 is None else f"0x{dst16:04x}", "kind": kind, "mle": mle_cmd,
+            "rssi": rssi, "len": length, "retry": retry, "decrypt": "failed" if failed else "ok" if mle_cmd is not None else None})
         if mle_cmd is not None:
             self._handle_mle(ts, layers, sender, src16, mle_cmd)
 
