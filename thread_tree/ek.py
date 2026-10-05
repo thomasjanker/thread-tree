@@ -51,6 +51,7 @@ FIELDS: dict[str, list[str]] = {
     "csl_period": ["wpan.header_ie.csl.period"],  # CSL IE: the sender is a CSL receiver (Thread 1.2)
     "csl_timeout": ["mle.tlv.csl_sychronized_timeout", "mle.tlv.csl_synchronized_timeout", "mle.tlv.csl_timeout"],
     "key_index": ["wpan.aux_sec.key_index"],
+    "key_id_mode": ["wpan.aux_sec.key_id_mode"],
     "mode_ftd": ["mle.tlv.mode.device_type"],
     "mode_idle_rx": ["mle.tlv.mode.idle_rx"],
     "reg_ipv6": ["mle.tlv.addr_reg_ipv6"],
@@ -221,9 +222,17 @@ class Handler:
         csl = self._int(self._one(layers, "csl_period"))
         if csl and sender is not None and not (sender.rloc16 is not None and A.is_router_rloc(sender.rloc16)):
             e.on_csl(ts, sender, csl)
-        counter = self._int(self._one(layers, "frame_counter"))
-        if counter is not None:
-            e.on_frame_counter(ts, sender, counter, self._int(self._one(layers, "key_index")))
+        # one auxiliary security header for the MAC frame and one for an MLE message: told apart by the key id mode
+        # (MLE: mode 2 with the key sequence; MAC: mode 1); without it, a frame carrying MLE counts as MLE
+        counters, modes, keys = self._all(layers, "frame_counter"), self._all(layers, "key_id_mode"), self._all(layers, "key_index")
+        for i, text in enumerate(counters):
+            counter = self._int(text)
+            if counter is None:
+                continue
+            mode = self._int(modes[i]) if i < len(modes) else None
+            context = ("mle" if mode == 2 else "mac") if mode is not None else (
+                "mle" if self._one(layers, "mle_cmd") is not None or len(counters) > 1 and i == 1 else "mac")
+            e.on_frame_counter(ts, sender, counter, self._int(keys[i]) if i < len(keys) else None, context)
         mle_cmd = self._int(self._one(layers, "mle_cmd"))
         addressed = any(v is not None for v in (src64, src16, dst64, dst16))
         kind = self._kind(layers, mle_cmd, mac_cmd, addressed)

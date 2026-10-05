@@ -380,12 +380,13 @@ class Engine:
             self._log(node, ts, "discovery")
             self.dirty = True
 
-    def on_frame_counter(self, ts: float, node: Node | None, counter: int, key: int | None) -> None:
-        """MAC frame counter of a secured frame: it only grows, so a jump back (or far ahead) means a restart."""
+    def on_frame_counter(self, ts: float, node: Node | None, counter: int, key: int | None, context: str = "mac") -> None:
+        """Frame counter of a secured frame (MAC or MLE): it only grows, so a jump back (or far ahead) means a restart."""
         if node is not None:
-            restart = B.on_frame_counter(node.behavior, ts, counter, key)
+            restart = B.on_frame_counter(node.behavior, ts, counter, key, context)
             if restart:
-                self._log(node, ts, "reboot", **restart)
+                when = restart.pop("ts", ts)
+                self._log(node, when, "reboot", counter=context, **restart)
 
     def on_csl(self, ts: float, node: Node | None, period: int | None = None) -> None:
         """The device uses CSL (Thread 1.2 synchronized sleepy end device): its parent sends at agreed times, it does
@@ -984,6 +985,8 @@ class Engine:
                 if target is not None:
                     target.load_bucket(idx, values)
             for node_id, ts, kind, params in state.get("events", []):
+                if kind == "reboot" and params.get("how") in ("reset", "skip") and "counter" not in params:
+                    continue  # written by a version that mixed the MAC and MLE counters: false alarms
                 if node_id == NETWORK_ID:
                     self.net_events.append({"ts": ts, "kind": kind, "params": params})
                 elif node_id in self.nodes:

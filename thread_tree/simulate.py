@@ -233,7 +233,7 @@ def seed_history(engine: Engine, now: float, hours: int = 24, seed: int = 7) -> 
         # what the checks against the standard found in the past day
         door = engine.nodes.get("a4c138fffe100002")
         if door is not None:
-            engine._log(door, now - 5.5 * 3600, "reboot", how="skip", **{"from": 18200, "to": 19180})
+            engine._log(door, now - 5.5 * 3600, "reboot", how="skip", counter="mac", **{"from": 18200, "to": 19180})
         if flapper is not None:
             engine._log(flapper, now - 2 * 1800 - 5, "parent_choice", chosen=17, best=9, chosen_margin=12, best_margin=28)
             engine._log(flapper, now - 4 * 1800 - 20, "attach_unanswered", router=17)

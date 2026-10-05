@@ -127,17 +127,33 @@ def judge_choice(search: dict | None, chosen: int | None) -> dict | None:
     return None
 
 
-def on_frame_counter(behavior: dict, ts: float, counter: int, key: int | None) -> dict | None:
-    """MAC frame counter of a secured frame of this device. Returns a suspected restart."""
-    last = behavior.get("fc")
-    behavior["fc"] = [counter, key, ts]
-    if not last or last[1] != key:
+def on_frame_counter(behavior: dict, ts: float, counter: int, key: int | None, context: str = "mac") -> dict | None:
+    """Frame counter of a secured frame of this device. Returns a restart once it is confirmed. A device keeps
+    separate counters for MAC frames and for MLE messages (Wireshark shows both in the same field): context tells
+    which. A jump only counts when the next frame continues from the new value; if it goes back to the old one,
+    the jump was a second counter, not a restart."""
+    counters = behavior.get("fc")
+    if not isinstance(counters, dict) or any(not isinstance(v, dict) for v in counters.values()):
+        counters = behavior["fc"] = {}  # written by an older version (one counter for all frames)
+    last = counters.get(context)
+    counters[context] = {"c": counter, "k": key, "ts": ts, "pending": None}
+    if not last or last["k"] != key:
         return None  # first frame, or a key switch: every device starts counting again
-    prev, _, prev_ts = last
+    pending = last.get("pending")
+    if pending:
+        if pending["to"] <= counter <= pending["to"] + COUNTER_AHEAD:
+            return {k: pending[k] for k in ("how", "from", "to")} | {"ts": pending["ts"]}  # confirmed
+        if last["c"] <= counter or abs(counter - pending["from"]) <= COUNTER_AHEAD:
+            counters[context] = {"c": pending["from"] if counter < pending["to"] else counter, "k": key, "ts": ts,
+                                 "pending": None}  # back on the old count: there was no restart
+            return None
+    prev, prev_ts = last["c"], last["ts"]
+    jump = None
     if counter < prev - 10:
-        return {"how": "reset", "from": prev, "to": counter}
-    if counter - prev >= COUNTER_AHEAD and ts - prev_ts <= COUNTER_JUMP_WITHIN:
-        return {"how": "skip", "from": prev, "to": counter}
+        jump = {"how": "reset", "from": prev, "to": counter, "ts": ts}
+    elif counter - prev >= COUNTER_AHEAD and ts - prev_ts <= COUNTER_JUMP_WITHIN:
+        jump = {"how": "skip", "from": prev, "to": counter, "ts": ts}
+    counters[context]["pending"] = jump
     return None
 
 

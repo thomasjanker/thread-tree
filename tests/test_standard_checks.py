@@ -40,10 +40,19 @@ class RuleTests(unittest.TestCase):
         b = {}
         self.assertIsNone(B.on_frame_counter(b, 0, 5000, 1))
         self.assertIsNone(B.on_frame_counter(b, 10, 5003, 1))
-        self.assertEqual(B.on_frame_counter(b, 20, 3, 1), {"how": "reset", "from": 5003, "to": 3})
+        self.assertIsNone(B.on_frame_counter(b, 20, 3, 1))                           # a jump back: wait for the next one
+        self.assertEqual(B.on_frame_counter(b, 25, 4, 1), {"how": "reset", "from": 5003, "to": 3, "ts": 20})  # confirmed
         self.assertIsNone(B.on_frame_counter(b, 30, 10, 2))                           # new key: counting starts again
-        self.assertEqual(B.on_frame_counter(b, 60, 1100, 2)["how"], "skip")          # restart: stored counter ahead
+        self.assertIsNone(B.on_frame_counter(b, 60, 1100, 2))
+        self.assertEqual(B.on_frame_counter(b, 61, 1101, 2)["how"], "skip")          # restart: stored counter ahead
         self.assertIsNone(B.on_frame_counter(b, 5000, 2500, 2))                      # a long silence: frames were sent
+
+    def test_two_counters_in_one_field_are_no_restart(self):
+        """MAC frames and MLE messages each have their own counter; seen in turn they look like jumps."""
+        b = {}
+        events = [B.on_frame_counter(b, t, c, 1) for t, c in
+                  ((0, 580407), (1, 71492), (2, 580408), (3, 71493), (4, 580409), (5, 71494), (6, 580410))]
+        self.assertEqual(events, [None] * 7)
 
     def test_advertisement_gaps(self):
         b = {}
@@ -92,7 +101,9 @@ class EngineTests(unittest.TestCase):
     def test_restart_from_the_frame_counter(self):
         self.e.on_frame_counter(T0, self.child, 900, 1)
         self.e.on_frame_counter(T0 + 30, self.child, 2, 1)
-        self.assertEqual(self.kinds(self.child), [("reboot", {"how": "reset", "from": 900, "to": 2})])
+        self.e.on_frame_counter(T0 + 31, self.child, 3, 1)
+        self.assertEqual(self.kinds(self.child), [("reboot", {"counter": "mac", "how": "reset", "from": 900, "to": 2})])
+        self.assertEqual(next(ev["ts"] for ev in self.child.events if ev["kind"] == "reboot"), T0 + 30)
 
     def test_old_network_data_and_network_events(self):
         e = self.e
@@ -153,9 +164,52 @@ class SnifferInputTests(unittest.TestCase):
         h.handle(pkt(2000, mle_cmd=["11"], mle_tlv_supervision_interval=["129"], wpan_dst64=[mac(R5)], **child))
         h.handle(pkt(3000, wpan_aux_sec_frame_counter=["500"], wpan_aux_sec_key_index=["1"], **child))
         h.handle(pkt(4000, wpan_aux_sec_frame_counter=["3"], wpan_aux_sec_key_index=["1"], **child))
+        h.handle(pkt(5000, wpan_aux_sec_frame_counter=["4"], wpan_aux_sec_key_index=["1"], **child))
         n = e.nodes[CHILD]
         self.assertEqual(n.behavior["supervision"], 129)
         self.assertEqual([ev["kind"] for ev in n.events if ev["kind"] in ("parent_choice", "reboot")], ["parent_choice", "reboot"])
+
+
+class CounterContextTests(unittest.TestCase):
+    def test_the_false_alarms_of_the_old_version_are_dropped_when_loading(self):
+        e = Engine()
+        e.load_state({"nodes": [], "events": [], "meta": {}})
+        node = e.on_frame(T0, CHILD, 0x2401)
+        with tempfile.TemporaryDirectory() as d:
+            store = Store(Path(d) / "t.sqlite")
+            e._log(node, T0 + 1, "reboot", how="reset", **{"from": 9, "to": 1})                 # old version
+            e._log(node, T0 + 2, "reboot", how="reset", counter="mac", **{"from": 9, "to": 1})  # new version
+            e._log(node, T0 + 3, "reboot", how="link_request")
+            store.save(e.export_state(clear_dirty=True))
+            e2 = Engine()
+            e2.load_state(store.load())
+        kept = [ev["params"] for ev in e2.nodes[CHILD].events if ev["kind"] == "reboot"]
+        self.assertEqual(kept, [{"how": "reset", "counter": "mac", "from": 9, "to": 1}, {"how": "link_request"}])
+
+    def test_mac_and_mle_counters_of_a_router_are_kept_apart(self):
+        e, h = handler()
+        router = {"wpan_src64": [mac(R5)], "wpan_src16": ["0x1400"]}
+        for i in range(6):
+            h.handle(pkt(i * 1000, mle_cmd=["4"], wpan_aux_sec_frame_counter=[str(71492 + i)], wpan_aux_sec_key_id_mode=["2"],
+                         wpan_aux_sec_key_index=["1"], wpan_dst16=["0xffff"], **router))          # MLE advertisement
+            h.handle(pkt(i * 1000 + 500, wpan_aux_sec_frame_counter=[str(580407 + i)], wpan_aux_sec_key_id_mode=["1"],
+                         wpan_aux_sec_key_index=["1"], wpan_dst16=["0x1401"], **router))        # MAC data frame
+        node = e.nodes[R5]
+        self.assertEqual([ev for ev in node.events if ev["kind"] == "reboot"], [])
+        self.assertEqual(sorted(node.behavior["fc"]), ["mac", "mle"])
+
+    def test_without_the_key_id_mode_a_frame_with_mle_is_mle(self):
+        e, h = handler()
+        router = {"wpan_src64": [mac(R5)], "wpan_src16": ["0x1400"]}
+        for i in range(4):
+            h.handle(pkt(i * 1000, mle_cmd=["4"], wpan_aux_sec_frame_counter=[str(100 + i)], wpan_dst16=["0xffff"], **router))
+            h.handle(pkt(i * 1000 + 500, wpan_aux_sec_frame_counter=[str(90000 + i)], wpan_dst16=["0x1401"], **router))
+        self.assertEqual([ev for ev in e.nodes[R5].events if ev["kind"] == "reboot"], [])
+
+    def test_old_stored_counters_do_not_break_anything(self):
+        b = {"fc": [5000, 1, 0.0]}
+        self.assertIsNone(B.on_frame_counter(b, 1, 5001, 1))
+        self.assertEqual(sorted(b["fc"]), ["mac"])
 
 
 class FindingAndLogTests(unittest.TestCase):
