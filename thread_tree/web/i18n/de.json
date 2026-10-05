@@ -3,7 +3,7 @@
   "legend": "Legende",
   "partition": "Partition",
   "view.tree": "Baum", "view.mesh": "Mesh", "view.table": "Tabelle",
-  "status.live": "live", "status.demo": "Demodaten", "status.stopped": "Aufzeichnung gestoppt",
+  "status.live": "Aufzeichnung läuft", "status.demo": "Demodaten", "status.stopped": "Aufzeichnung gestoppt",
   "banner.nokey": "Kein Netzwerkschlüssel: Frames sind verschlüsselt, sichtbar sind nur MAC-Daten (Adressen, RLOC16). Thread-Dataset in den Einstellungen eingeben.",
   "banner.decrypt": "Thread-Nachrichten werden empfangen, lassen sich aber nicht entschlüsseln: Netzwerkschlüssel (Dataset) prüfen und kontrollieren, ob der Sniffer-Kanal zum Netz passt.",
   "banner.error": "Fehler bei der Aufzeichnung: ",

@@ -3,7 +3,7 @@
   "legend": "Legend",
   "partition": "Partition",
   "view.tree": "Tree", "view.mesh": "Mesh", "view.table": "Table",
-  "status.live": "live", "status.demo": "demo data", "status.stopped": "capture stopped",
+  "status.live": "capture running", "status.demo": "demo data", "status.stopped": "capture stopped",
   "banner.nokey": "No network key: frames are encrypted, only MAC-level data (addresses, RLOC16) is visible. Enter the Thread dataset in Settings.",
   "banner.decrypt": "Thread messages are received but cannot be decrypted: check the network key (dataset) and that the sniffer channel matches the network.",
   "banner.error": "Capture error: ",
