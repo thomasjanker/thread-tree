@@ -77,6 +77,7 @@ def snapshot(engine: Engine, now: float | None = None) -> dict:
                 "heard": n.last_heard > 0, "last_heard": n.last_heard,
                 "version": n.version, "last_diag": n.last_diag, "link": n.link, "vendor": n.vendor,
                 "diag_self": bool(engine.diag_self and n.ext == engine.diag_self),
+                "srp": (n.behavior.get("srp") or {}).get("host"),
                 "mac_confirmed": n.mac_confirmed, "br_seen": n.br_seen,
                 "identity_via_rloc": bool(n.ext and n.rloc16 is not None
                                           and n.last_heard - n.mac_confirmed > IDENTITY_VIA_RLOC_AFTER),
@@ -110,7 +111,7 @@ def _placeholder(nodes: dict, nid: str, **extra) -> None:
                   "role": ROLE_UNKNOWN, "border_router": False, "partition_id": None,
                   "ftd": None, "rx_on_idle": None, "online": False, "online_indirect": False, "first_seen": 0, "last_seen": 0, "last_addressed": 0,
                   "heard": False, "last_heard": 0, "mac_confirmed": 0, "br_seen": 0, "identity_via_rloc": False,
-                  "version": None, "last_diag": 0, "link": None, "vendor": None, "diag_self": False,
+                  "version": None, "last_diag": 0, "link": None, "vendor": None, "diag_self": False, "srp": None,
                   "addresses": [], "placeholder": True, **extra}
 
 

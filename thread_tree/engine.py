@@ -388,6 +388,61 @@ class Engine:
                 when = restart.pop("ts", ts)
                 self._log(node, when, "reboot", counter=context, **restart)
 
+    def node_for_ip(self, text: str | None) -> Node | None:
+        """The device an IPv6 address belongs to: RLOC and MAC-based link-local addresses tell it directly,
+        others are looked up among the addresses seen."""
+        addr = A.parse_ip(text) if text else None
+        if addr is None or addr.is_multicast:
+            return None
+        iid = A.iid(addr)
+        if A.is_rloc_iid(iid):
+            return self.nodes.get(self.rloc_index.get(iid & 0xFFFF, ""))
+        if A.classify(addr, self.ml_prefix) == A.LINK_LOCAL:
+            return self.nodes.get(A.ext_from_link_local(addr) or "")
+        key = str(addr)
+        return next((n for n in self.nodes.values() if key in n.addresses), None)
+
+    def on_poll_answer(self, ts: float, node: Node | None, pending: bool) -> None:
+        """The parent acknowledged a data poll; "frame pending" set means it holds data for the device."""
+        if node is not None:
+            counts = node.behavior.setdefault("polls_acked", [0, 0])  # [answered, with data waiting]
+            counts[0] += 1
+            counts[1] += int(pending)
+
+    def on_relay(self, ts: float, transmitter: Node | None, origin: Node | None, dest: Node | None) -> None:
+        """A frame with a mesh header: sent over several hops. The transmitter forwards it unless it is the origin."""
+        if transmitter is not None and origin is not None and transmitter.id != origin.id:
+            transmitter.behavior["forwarded"] = transmitter.behavior.get("forwarded", 0) + 1
+        if origin is not None and transmitter is not None and transmitter.id == origin.id:
+            origin.behavior["multihop"] = origin.behavior.get("multihop", 0) + 1
+
+    def on_matter(self, ts: float, src: Node | None, dst: Node | None, length: int | None) -> None:
+        """Matter traffic (UDP 5540, end-to-end encrypted): who sends and receives application data, and when."""
+        for node, direction in ((src, "out"), (dst, "in")):
+            if node is not None:
+                m = node.behavior.setdefault("matter", {"out": 0, "in": 0, "bytes": 0, "last": 0.0})
+                m[direction] += 1
+                m["bytes"] += length or 0
+                m["last"] = max(m["last"], ts)
+
+    def on_router_id(self, ts: float, node: Node | None, what: str) -> None:
+        """TMF Address Solicit / Release: a device asks the leader for a router ID, or gives it back."""
+        if node is not None:
+            self._log(node, ts, "router_id", what=what)
+
+    def on_srp(self, ts: float, node: Node | None, names: list[str]) -> None:
+        """An SRP registration (DNS update to the border router): the device's host name and its services."""
+        if node is None:
+            return
+        # the update names the zone (default.service.arpa) first: the host is a name inside it
+        host = next((n for n in names if "._" not in n and not n.startswith("_") and n.endswith(".service.arpa")
+                     and n.count(".") > 2), None)
+        services = sorted({n for n in names if "._" in n and not n.startswith("_")})
+        if host or services:
+            node.behavior["srp"] = {"host": (host or "").replace(".default.service.arpa", "") or None,
+                                    "services": services[:10], "ts": ts}
+            self.dirty = True
+
     def on_csl(self, ts: float, node: Node | None, period: int | None = None) -> None:
         """The device uses CSL (Thread 1.2 synchronized sleepy end device): its parent sends at agreed times, it does
         not poll in a rhythm, so poll gaps say nothing about it."""

@@ -221,3 +221,6 @@ nav button[aria-selected="true"] .icon { stroke: #fff; }
 .live-messages { font-size: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
 .toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
 .toolbar { align-items: center; flex-wrap: wrap; }
+tr.live-detail td { background: var(--bg); }
+.decode { margin-top: 8px; font-size: 12px; } .decode details { margin-left: 14px; } .decode > details { margin-left: 0; }
+.decode summary { cursor: pointer; font-weight: 600; } .decode-leaf { margin-left: 14px; word-break: break-all; }

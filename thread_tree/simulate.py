@@ -243,6 +243,22 @@ def seed_history(engine: Engine, now: float, hours: int = 24, seed: int = 7) -> 
         garden = engine.nodes.get("c8d1d1fffe000016")
         if garden is not None:
             engine._log(garden, now - 6 * 3600 + 200, "netdata_lag", version=6, current=7, seconds=150)
+        # what the frames said beyond the topology: SRP names, Matter traffic, forwarding, pending data
+        for ext, host, service in (("c8d1d1fffe000009", "bulb-kitchen", "Bulb Kitchen._matter._tcp"),
+                                   ("a4c138fffe100001", "motion-hall", "Motion Hall._matter._tcp")):
+            node = engine.nodes.get(ext)
+            if node is not None:
+                node.behavior["srp"] = {"host": host, "services": [f"{service}.default.service.arpa"], "ts": now - 1800}
+                node.behavior["matter"] = {"out": rng.randint(200, 900), "in": rng.randint(200, 900),
+                                           "bytes": rng.randint(40000, 160000), "last": now - rng.randint(5, 300)}
+        for ext, count in (("c8d1d1fffe000005", 412), ("c8d1d1fffe000011", 96)):
+            if ext in engine.nodes:
+                engine.nodes[ext].behavior["forwarded"] = count
+        if door is not None:
+            door.behavior["multihop"] = 23
+            door.behavior["polls_acked"] = [2950, 61]
+        if garden is not None:  # became a router (before it lagged behind with the Network Data)
+            engine._log(garden, now - 6 * 3600 + 30, "router_id", what="request")
         engine._net_log(now - 6 * 3600, "netdata_version", partition=0x1A2B3C4D, version=7)
         engine._net_log(now - 5.0 * 3600, "routers", count=4, before=5)
         engine._net_log(now - 4.8 * 3600, "routers", count=5, before=4)

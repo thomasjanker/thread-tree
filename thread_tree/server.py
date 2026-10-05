@@ -120,6 +120,10 @@ def make_server(engine: Engine, host: str, port: int, controller: Controller) ->
                 body = nodes_csv(engine, snap, analysis, time.time()).encode("utf-8")
                 return self._send(200, body, "text/csv; charset=utf-8",
                                   {"Content-Disposition": 'attachment; filename="thread-tree-nodes.csv"'})
+            frame = re.fullmatch(r"/api/live/frame/(\d+)", path)
+            if frame:
+                decoded = controller.live_frame(int(frame.group(1)))
+                return self._json(404, {"error": "frame not kept"}) if decoded is None else self._json(200, decoded)
             detail = re.fullmatch(r"/api/nodes/([^/]+)/diagnostics", path)
             if detail:
                 snap, analysis = self._report()

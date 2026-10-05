@@ -237,7 +237,7 @@ function meshLegend() {
 
 // ---- table view ------------------------------------------------------------
 function searchText(n) {
-  return [n.name, n.role, roleLabel(n.role), n.rloc16, n.ext, n.ext ? fmtMac(n.ext) : '', n.border_router ? 'br' : '', ...n.addresses.map(a => a.addr)].join(' ').toLowerCase();
+  return [n.name, n.srp, n.role, roleLabel(n.role), n.rloc16, n.ext, n.ext ? fmtMac(n.ext) : '', n.border_router ? 'br' : '', ...n.addresses.map(a => a.addr)].join(' ').toLowerCase();
 }
 function reachLabel(n) {
   return h('span', { class: `tag reach-${n.heard ? 'direct' : 'indirect'}`, title: t(n.heard ? 'reach.direct.tip' : 'reach.indirect.tip') },

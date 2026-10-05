@@ -52,6 +52,28 @@ FIELDS: dict[str, list[str]] = {
     "csl_timeout": ["mle.tlv.csl_sychronized_timeout", "mle.tlv.csl_synchronized_timeout", "mle.tlv.csl_timeout"],
     "key_index": ["wpan.aux_sec.key_index"],
     "key_id_mode": ["wpan.aux_sec.key_id_mode"],
+    # for the live view and the protocol details (missing ones only leave a detail empty)
+    "frame_no": ["frame.number"],
+    "pending": ["wpan.pending"],
+    "ack_req": ["wpan.ack_request"],
+    "security": ["wpan.security"],
+    "frame_version": ["wpan.version"],
+    "sec_level": ["wpan.aux_sec.sec_level"],
+    "mesh_orig16": ["6lowpan.mesh.orig16"],
+    "mesh_orig64": ["6lowpan.mesh.orig64"],
+    "mesh_dest16": ["6lowpan.mesh.dest16"],
+    "mesh_dest64": ["6lowpan.mesh.dest64"],
+    "mesh_hops": ["6lowpan.mesh.hops"],
+    "udp_src": ["udp.srcport"],
+    "udp_dst": ["udp.dstport"],
+    "udp_len": ["udp.length"],
+    "icmp_type": ["icmpv6.type"],
+    "coap_uri": ["coap.opt.uri_path"],
+    "coap_code": ["coap.code"],
+    "mle_tlv": ["mle.tlv.type"],
+    "dns_name": ["dns.qry.name"],
+    "dns_resp": ["dns.resp.name"],
+    "dns_srv": ["dns.srv.target"],
     "mode_ftd": ["mle.tlv.mode.device_type"],
     "mode_idle_rx": ["mle.tlv.mode.idle_rx"],
     "reg_ipv6": ["mle.tlv.addr_reg_ipv6"],
@@ -78,6 +100,14 @@ MLE_CHILD_ID_RESPONSE = 12  # parent -> child: carries the assigned Address16
 MLE_FROM_CHILD = (9, 11, 13)  # Parent Request, Child ID Request, Child Update Request
 MLE_CHILD_UPDATE_RESPONSE = 14  # from a child when its parent asked; from the parent otherwise
 MAC_DATA_REQUEST = 4
+PORTS = {19788: "mle", 61631: "tmf", 5540: "matter", 53: "dns", 53535: "srp", 5683: "coap"}
+POLL_ACK = 0.1  # s: the acknowledgement of a data poll follows at once (with "frame pending" if data waits)
+
+
+# details for the live view only: a missing one is not worth a warning
+DETAIL_FIELDS = {"frame_no", "pending", "ack_req", "security", "frame_version", "sec_level", "mesh_orig16", "mesh_orig64",
+                 "mesh_dest16", "mesh_dest64", "mesh_hops", "udp_src", "udp_dst", "udp_len", "icmp_type", "coap_uri",
+                 "coap_code", "mle_tlv", "dns_name", "dns_resp", "dns_srv"}
 
 
 def resolve_fields(available: set[str]) -> dict[str, str]:
@@ -89,7 +119,8 @@ def resolve_fields(available: set[str]) -> dict[str, str]:
                 chosen[logical] = name
                 break
         else:
-            log.warning("Wireshark field for %r not available (%s): feature disabled", logical, names[0])
+            (log.info if logical in DETAIL_FIELDS else log.warning)(
+                "Wireshark field for %r not available (%s): feature disabled", logical, names[0])
     return chosen
 
 
@@ -100,8 +131,9 @@ class Handler:
         # MLE messages seen, and how many could / could not be decrypted
         self.stats = {"frames": 0, "mle_ok": 0, "mle_failed": 0}
         self._last_nwd: tuple | None = None
-        self.recent: deque[dict] = deque(maxlen=500)  # the last frames, for the live view
+        self.recent: deque[dict] = deque(maxlen=2000)  # the last frames, for the live view
         self.seq = 0
+        self._poll: tuple | None = None  # (sequence number, node, time) of the last data poll: its ack tells "pending"
 
     def _all(self, layers: dict, logical: str) -> list[str]:
         name = self.fields.get(logical)
@@ -246,11 +278,13 @@ class Handler:
         elif mle_cmd is not None:
             self.stats["mle_ok"] += 1
         self.seq += 1
-        self.recent.append({
+        record = {
             "seq": self.seq, "ts": ts, "src": sender.id if sender is not None else None,
             "src16": None if src16 is None else f"0x{src16:04x}", "dst": dst_ext,
             "dst16": None if dst16 is None else f"0x{dst16:04x}", "kind": kind, "mle": mle_cmd,
-            "rssi": rssi, "len": length, "retry": retry, "decrypt": "failed" if failed else "ok" if mle_cmd is not None else None})
+            "rssi": rssi, "len": length, "retry": retry, "decrypt": "failed" if failed else "ok" if mle_cmd is not None else None}
+        record.update(self._details(ts, layers, sender, kind, mac_cmd, ip_src))
+        self.recent.append(record)
         if mle_cmd is not None:
             self._handle_mle(ts, layers, sender, src16, mle_cmd)
 
@@ -278,6 +312,70 @@ class Handler:
             # the stable subset (sent to sleepy children) replaces every RLOC16 with 0xfffe
             complete = 0xFFFE not in brs
             e.on_network_data(ts, {v for v in brs if v is not None and A.is_valid_rloc16(v)}, complete)
+
+    def _details(self, ts: float, layers: dict, sender, kind: str, mac_cmd: int | None, ip_src: str | None) -> dict:
+        """What else the frame says, for the live view, and what the engine learns from it: the mesh header of a
+        forwarded packet, Matter traffic, router ID requests (TMF), SRP registrations, pending data for sleepy devices."""
+        e = self.engine
+        out: dict = {"no": self._int(self._one(layers, "frame_no"))}
+        flags = {k: self._bool(self._one(layers, k)) for k in ("pending", "ack_req", "security")}
+        flags["version"] = self._int(self._one(layers, "frame_version"))
+        out["flags"] = {k: v for k, v in flags.items() if v is not None}
+        counter, level = self._int(self._one(layers, "frame_counter")), self._int(self._one(layers, "sec_level"))
+        if counter is not None or level is not None:
+            out["sec"] = {"level": level, "mode": self._int(self._one(layers, "key_id_mode")), "counter": counter,
+                          "key": self._int(self._one(layers, "key_index"))}
+        seq = self._int(self._one(layers, "seq"))
+        if mac_cmd == MAC_DATA_REQUEST and sender is not None:  # data poll: its acknowledgement says whether data waits
+            self._poll = (seq, sender, ts)
+        elif kind == "ack" and self._poll and seq == self._poll[0] and 0 <= ts - self._poll[2] <= POLL_ACK:
+            e.on_poll_answer(ts, self._poll[1], bool(flags.get("pending")))
+            out["answers"] = self._poll[1].id
+            self._poll = None
+        # mesh header: a packet forwarded over several hops names its origin and final destination
+        def mesh_node(prefix: str):
+            ext = self._one(layers, f"mesh_{prefix}64")
+            short = self._one(layers, f"mesh_{prefix}16")
+            if ext:
+                return e.nodes.get(A.normalize_ext(ext) or ""), A.normalize_ext(ext)
+            if short:
+                rloc = A.parse_rloc16(short)
+                return e.nodes.get(e.rloc_index.get(rloc, "")) if rloc is not None else None, short
+            return None, None
+        (origin, olabel), (dest, dlabel) = mesh_node("orig"), mesh_node("dest")
+        if olabel or dlabel:
+            hops = self._int(self._one(layers, "mesh_hops"))
+            out["mesh"] = {"orig": origin.id if origin else olabel, "dest": dest.id if dest else dlabel, "hops": hops}
+            e.on_relay(ts, sender, origin, dest)
+        ip_dst = self._one(layers, "ip_dst")
+        if ip_src or ip_dst:
+            out["ip"] = {"src": ip_src, "dst": ip_dst}
+        sport, dport = self._int(self._one(layers, "udp_src")), self._int(self._one(layers, "udp_dst"))
+        proto = PORTS.get(dport) or PORTS.get(sport) or ("icmpv6" if self._one(layers, "icmp_type") else None)
+        if sport is not None or dport is not None:
+            out["udp"] = {"src": sport, "dst": dport, "len": self._int(self._one(layers, "udp_len"))}
+        if proto:
+            out["proto"] = proto
+        if proto == "icmpv6":
+            out["icmp"] = self._int(self._one(layers, "icmp_type"))
+        tlvs = [self._int(v) for v in self._all(layers, "mle_tlv")]
+        if tlvs:
+            out["tlvs"] = [v for v in tlvs if v is not None]
+        origin_by_ip = e.node_for_ip(ip_src) or (origin if origin is not None else None)
+        if proto == "matter":  # end-to-end encrypted: only who, when and how much
+            e.on_matter(ts, origin_by_ip, e.node_for_ip(ip_dst), self._int(self._one(layers, "udp_len")))
+        uri = "/".join(self._all(layers, "coap_uri"))
+        if uri:
+            out["uri"] = "/" + uri
+            out["coap"] = self._int(self._one(layers, "coap_code"))
+            if proto == "tmf" and uri in ("a/as", "a/ar") and out["coap"] == 2:  # POST: a router ID requested / released
+                e.on_router_id(ts, origin_by_ip, "request" if uri == "a/as" else "release")
+        names = list(dict.fromkeys(self._all(layers, "dns_name") + self._all(layers, "dns_resp") + self._all(layers, "dns_srv")))
+        if names:
+            out["dns"] = names[:8]
+            if proto == "srp":
+                e.on_srp(ts, origin_by_ip or sender, names)
+        return out
 
     def _handle_mle(self, ts: float, layers: dict, sender, src16: int | None, cmd: int) -> None:
         e = self.engine

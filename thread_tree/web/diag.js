@@ -56,6 +56,7 @@ function specialEventText(kind, p) {
     case 'br_change': return tpl('event.br_change', { added: devs(p.added), removed: devs(p.removed) });
     case 'routers': return tpl('event.routers', { a: p.before, b: p.count });
     case 'netdata_version': return tpl('event.netdata_version', { version: p.version, partition: pid(p.partition) });
+    case 'router_id': return t(p.what === 'release' ? 'event.router_id.release' : 'event.router_id.request');
     default: return null;
   }
 }
@@ -376,6 +377,23 @@ function behaviorSection(d) {
     h('p', { class: 'muted small' }, t('diag.note.behavior')));
 }
 
+// what the frames say beyond the topology (sniffer): SRP names, Matter traffic, forwarding, pending data
+function protocolSection(d) {
+  const p = d.protocol;
+  if (!p) return null;
+  const tiles = [];
+  if (p.matter) tiles.push(tile(t('diag.p.matter'), `${p.matter.out} / ${p.matter.in}`, t('diag.p.matter.tip')),
+    tile(t('diag.p.matter_last'), p.matter.last ? ago(p.matter.last) : '–'), tile(t('diag.p.matter_bytes'), fmtBytes(p.matter.bytes)));
+  if (p.forwarded) tiles.push(tile(t('diag.p.forwarded'), String(p.forwarded), t('diag.p.forwarded.tip')));
+  if (p.multihop) tiles.push(tile(t('diag.p.multihop'), String(p.multihop), t('diag.p.multihop.tip')));
+  if (p.polls_acked) tiles.push(tile(t('diag.p.pending'), fmtPct(p.polls_pending / p.polls_acked), t('diag.p.pending.tip')));
+  return section('diag.sec.protocol',
+    p.srp ? h('dl', { class: 'facts' }, h('dt', {}, t('diag.p.srp_host')), h('dd', { class: 'mono' }, p.srp.host || '–'),
+      h('dt', {}, t('diag.p.srp_services')), h('dd', { class: 'mono' }, (p.srp.services || []).join(', ') || '–')) : null,
+    tiles.length ? h('div', { class: 'tiles' }, tiles) : null,
+    h('p', { class: 'muted small' }, t('diag.note.protocol')));
+}
+
 function linksSection(d) {
   if (!d.links.length) return d.role === 'router' || d.role === 'leader'
     ? section('diag.sec.links', h('p', { class: 'muted' }, t('diag.links.none'))) : null;
@@ -473,7 +491,7 @@ function renderNodeDiag() {
       iconButton('json', t('diag.export.json'), { href: `/api/nodes/${encodeURIComponent(d.id)}/diagnostics`, download: `thread-tree-${d.id}.json` })),
     facts,
     d.findings.length ? section('diag.findings.title', d.findings.map(f => findingRow(f, null))) : null,
-    behaviorSection(d), signalSection(d), trafficSection(d), timingSection(d), linksSection(d), parentSection(d), parentLinkSection(d), childrenSection(d),
+    behaviorSection(d), protocolSection(d), signalSection(d), trafficSection(d), timingSection(d), linksSection(d), parentSection(d), parentLinkSection(d), childrenSection(d),
     historySection(d),
     section('diag.sec.addresses', d.addresses.length ? addressList({ addresses: d.addresses }, false) : h('p', { class: 'muted' }, '–')));
 }

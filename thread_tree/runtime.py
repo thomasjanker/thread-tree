@@ -322,15 +322,23 @@ class Controller:
             minute = sum(1 for f in (handler.recent if handler else []) if last is not None and f["ts"] >= last - 60)
             ds = self.dataset
             return {
-                "frames": frames[-300:], "seq": handler.seq if handler else 0,
+                "frames": frames[-2000:], "seq": handler.seq if handler else 0,
                 "capture": {"running": bool(cap and not cap.finished.is_set()), "error": cap.error if cap else None,
                             "source": "auto" if self.source == "auto" else self.source.split(":", 1)[0],
                             "sniffer": self.sniffer or (self.source[4:] if self.source.startswith("nrf:") else None),
                             "channel": self.channel or (ds.channel if ds else None), "decrypting": bool(self.key),
                             "stats": dict(cap.stats) if cap else {}, "last_frame": last,
                             "per_minute": minute, "waiting_for_sniffer": self.no_sniffer, "waiting_for_dataset": self.waiting,
-                            "messages": list(cap.messages) if cap else []},
+                            "messages": list(cap.messages) if cap else [],
+                            "kept": len(cap.raw) if cap else 0,
+                            "oldest": handler.recent[0]["ts"] if handler and handler.recent else None},
             }
+
+    def live_frame(self, number: int) -> dict | None:
+        """Full decode of one frame the capture kept (None: not kept any more, or no raw stream)."""
+        with self.lock:
+            cap = self.capture
+        return cap.decode(number) if cap is not None else None
 
     def _sticks(self, cap, diag_error: str | None) -> list[dict]:
         """The USB serial devices plugged in, what they are and what they are used for (for the UI)."""

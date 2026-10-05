@@ -549,6 +549,7 @@ def node_diagnostics(engine: Engine, snap: dict, analysis: dict, node_id: str, n
             "last_addressed": n["last_addressed"], "mac_confirmed": n["mac_confirmed"],
             "status": info["status"], "findings": info["findings"],
             "behavior": behavior_summary(engine, raw, now),
+            "protocol": _protocol_summary(raw),
             "version": n["version"], "last_diag": n["last_diag"], "vendor": n["vendor"], "link": n["link"],
             "diag_self": n["diag_self"], "ftd": n["ftd"], "rx_on_idle": n["rx_on_idle"],
             "stats": raw.stats.summary(now), "series": raw.stats.series(now, 24),
@@ -571,6 +572,15 @@ def _csv_text(value) -> str:
     """Text for a user-controlled cell; a leading = + - @ would be run as a formula by spreadsheets."""
     text = "" if value is None else str(value)
     return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
+def _protocol_summary(raw) -> dict | None:
+    """What the frames say beyond the topology: SRP names, Matter traffic, forwarded frames, pending data."""
+    b = raw.behavior or {}
+    acked, pending = (b.get("polls_acked") or [0, 0])
+    out = {"srp": b.get("srp"), "matter": b.get("matter"), "forwarded": b.get("forwarded", 0),
+           "multihop": b.get("multihop", 0), "polls_acked": acked, "polls_pending": pending}
+    return out if any(v for v in out.values()) else None
 
 
 def _behavior_columns(s: dict | None) -> list:

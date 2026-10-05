@@ -14,6 +14,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
+import struct
 import shlex
 import shutil
 import subprocess
@@ -30,6 +32,9 @@ log = logging.getLogger(__name__)
 
 
 DEFAULT_EXTCAP_SCRIPT = "~/.config/wireshark/extcap/nrf802154_sniffer.py"
+RAW_FRAMES = 2000            # raw frames kept for the full decode of the live view
+SRP_PORT = 53535             # OpenThread's SRP server port: decoded as DNS (Wireshark only knows port 53)
+PCAP_MAGIC = {b"\xd4\xc3\xb2\xa1": "<", b"\xa1\xb2\xc3\xd4": ">", b"\x4d\x3c\xb2\xa1": "<", b"\xa1\xb2\x3c\x4d": ">"}
 
 
 def nrf_command(port: str, channel: int, script: str = DEFAULT_EXTCAP_SCRIPT) -> str:
@@ -50,6 +55,28 @@ def tshark_fields(tshark: str) -> set[str]:
     return {cols[2] for line in out.splitlines() if line.startswith("F\t") and len(cols := line.split("\t")) > 2}
 
 
+def decode_options(network_key: str | None) -> list[str]:
+    """tshark options for decryption and decoding, shared by the capture and the full decode of one frame."""
+    out = ["-d", f"udp.port=={SRP_PORT},dns"]
+    if network_key:
+        # Thread MAC key is derived from the network key: Wireshark's "Thread hash" mode.
+        out += ["-o", f'uat:ieee802154_keys:"{network_key}","1","Thread hash"']
+    return out
+
+
+def _scrub(obj, key: str | None):
+    """Remove anything key-like from a decoded frame: fields named like a key, and any value containing the key."""
+    norm = (key or "").lower()
+    if isinstance(obj, dict):
+        return {k: ("<redacted>" if re.search(r"key|pskc|kek", k, re.I) and not re.search(r"key_?(id|index|mode|seq|source)", k, re.I)
+                    else _scrub(v, key)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub(v, key) for v in obj]
+    if isinstance(obj, str) and norm and norm in re.sub(r"[^0-9a-f]", "", obj.lower()):
+        return "<redacted>"
+    return obj
+
+
 def build_tshark_argv(tshark: str, source: str, chosen: dict[str, str], available: set[str],
                       network_key: str | None, dataset: Dataset | None,
                       extra: list[str]) -> tuple[list[str], str | None]:
@@ -58,9 +85,7 @@ def build_tshark_argv(tshark: str, source: str, chosen: dict[str, str], availabl
     argv = [tshark, "-n", "-l", "-T", "ek"]
     for name in dict.fromkeys(chosen.values()):
         argv += ["-e", name]
-    if network_key:
-        # Thread MAC key is derived from the network key: Wireshark's "Thread hash" mode.
-        argv += ["-o", f'uat:ieee802154_keys:"{network_key}","1","Thread hash"']
+    argv += decode_options(network_key)
     if dataset and dataset.pan_id is not None and {"wpan.dst_pan", "wpan.src_pan"} <= available:
         argv += ["-Y", pan_filter(dataset.pan_id)]
     argv += extra
@@ -103,6 +128,8 @@ class CaptureThread(threading.Thread):
         self.finished = threading.Event()
         self.handler: Handler | None = None
         self.messages: deque[dict] = deque(maxlen=40)  # what tshark and the sniffer script printed (key masked)
+        self.raw: deque[tuple[int, bytes]] = deque(maxlen=RAW_FRAMES)  # (frame number, pcap record) for the full decode
+        self.pcap_header: bytes | None = None
 
     def run(self) -> None:
         try:
@@ -119,15 +146,17 @@ class CaptureThread(threading.Thread):
             chosen = resolve_fields(available)
             argv, producer = build_tshark_argv(self.tshark, self.source, chosen, available,
                                                self.network_key, self.dataset, self.extra)
-            stdin = None
+            prod = None
             if producer:
                 prod = subprocess.Popen(shlex.split(producer), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=False)
                 self._procs.append(prod)
                 threading.Thread(target=self._collect, args=(prod.stderr, "sniffer"), daemon=True).start()
-                stdin = prod.stdout
             log.info("starting tshark (key %s)", "set" if self.network_key else "NOT set: frames stay encrypted")
-            proc = subprocess.Popen(argv, stdin=stdin, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            proc = subprocess.Popen(argv, stdin=subprocess.PIPE if prod else None, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True)
             self._procs.append(proc)
+            if prod:  # the pcap stream passes through us: the raw frames are kept for the full decode
+                threading.Thread(target=self._pump, args=(prod.stdout, proc.stdin), daemon=True).start()
             threading.Thread(target=self._collect, args=(proc.stderr, "tshark"), daemon=True).start()
             handler = self.handler = Handler(self.engine, chosen)
             self.stats = handler.stats
@@ -141,6 +170,58 @@ class CaptureThread(threading.Thread):
             log.error("capture stopped: %s", exc)
         finally:
             self.finished.set()
+
+    def _pump(self, src, dst) -> None:
+        """Copy the producer's pcap stream to tshark, keeping the last frames (pcapng is only passed through)."""
+        def read(n: int) -> bytes:
+            buf = b""
+            while len(buf) < n:
+                chunk = src.read(n - len(buf))
+                if not chunk:
+                    raise EOFError
+                buf += chunk
+            return buf
+        try:
+            head = read(24)
+            dst.write(head)
+            dst.flush()
+            endian = PCAP_MAGIC.get(head[:4])
+            if endian is None:  # not classic pcap: no frame boundaries known
+                while chunk := src.read(65536):
+                    dst.write(chunk)
+                    dst.flush()
+                return
+            self.pcap_header = head
+            number = 0
+            while True:
+                record = read(16)
+                length = struct.unpack(endian + "IIII", record)[2]
+                data = read(length)
+                dst.write(record + data)
+                dst.flush()
+                number += 1
+                self.raw.append((number, record + data))
+        except (EOFError, BrokenPipeError, OSError, struct.error):
+            pass
+        finally:
+            try:
+                dst.close()
+            except OSError:
+                pass
+
+    def decode(self, number: int, timeout: float = 15.0) -> dict | None:
+        """The full Wireshark decode of one kept frame (all layers and fields), without anything key-like."""
+        record = next((r for n, r in self.raw if n == number), None)
+        if record is None or self.pcap_header is None:
+            return None
+        argv = [self.tshark, "-n", "-r", "-", "-T", "json"] + decode_options(self.network_key)
+        out = subprocess.run(argv, input=self.pcap_header + record, capture_output=True, timeout=timeout)
+        try:
+            packets = json.loads(out.stdout or b"[]")
+        except json.JSONDecodeError:
+            return None
+        layers = packets[0]["_source"]["layers"] if packets else None
+        return _scrub(layers, self.network_key)
 
     def _collect(self, stream, source: str) -> None:
         """Lines a process prints on stderr: into the log and the live view, with anything that looks like a key masked."""

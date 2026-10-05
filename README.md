@@ -28,6 +28,7 @@ see [Verification status](#verification-status).
 - [Diagnosis and findings](#diagnosis-and-findings)
 - [Checks against the standard and the log](#checks-against-the-standard-and-the-log)
 - [Guided tests](#guided-tests)
+- [Live view](#live-view)
 - [Active diagnostics](#active-diagnostics)
 - [Raspberry Pi setup](#raspberry-pi-setup)
 - [Security](#security)
@@ -222,6 +223,23 @@ the simulator plays your part.
 | Commissioning | pair a new device | every new device with Discovery Request, parent search, attach (the DTLS joining itself is encrypted) |
 
 With the sniffer the times are accurate to the second; with the diagnostic node alone, changes show at its next round.
+
+## Live view
+
+The **Live** tab lists every frame the sniffer received, newest first: time, sender, destination, kind (MLE command,
+data poll, acknowledgement, TMF request, Matter, SRP …), signal and length. The last 2000 frames are kept (the header
+shows how many minutes that covers), 500 are shown; acknowledgements can be hidden. A click on a frame shows all its
+fields: MAC flags (frame pending, acknowledgement requested, security), the auxiliary security header (level, key id mode,
+key index, frame counter: no key), the mesh header of a multi-hop packet (origin, final destination, hops left), IPv6 and
+UDP addresses and ports, MLE TLVs, TMF/CoAP URI, DNS/SRP names, and for an acknowledgement which data poll it answers.
+**Full decode** has tshark decode exactly that one frame and shows the complete Wireshark tree, with every key-like
+field and any value containing the network key removed (only with the nRF sniffer or a `cmd:` source, whose raw stream
+thread-tree passes on to tshark).
+
+From the same frames the device pages show what the topology does not: the SRP host name and services a device
+registered, its Matter traffic (UDP 5540 is end-to-end encrypted: only counted), how many frames a router forwarded for
+others, and the share of a sleepy device's data polls its parent answered with *frame pending*. Router ID requests and
+releases (TMF Address Solicit / Release) appear in the device's log.
 
 ## Active diagnostics
 
