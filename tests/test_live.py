@@ -175,3 +175,14 @@ class RawFrameTests(unittest.TestCase):
     def test_frame_endpoint_without_raw_frames(self):
         c = Controller(Engine(), "run", "auto", tshark="definitely-not-installed")
         self.assertIsNone(c.live_frame(1))
+
+    def test_sniffer_script_ends_with_tshark(self):
+        """The sniffer script holds the serial port: when tshark ends, it must end too, or a restart cannot open it."""
+        with tempfile.TemporaryDirectory() as d:
+            fake = Path(d) / "tshark"
+            fake.write_text("#!/bin/sh\n[ \"$1\" = -G ] && exit 0\nhead -c 100 > /dev/null\nexit 0\n")
+            fake.chmod(0o755)
+            cap = CaptureThread(Engine(), "cmd:sh -c 'trap \"\" TERM PIPE; while :; do printf xxxxxxxxxxxxxxxx; done'", tshark=str(fake))
+            cap.start()
+            self.assertTrue(wait_for(lambda: cap.finished.is_set(), timeout=20))
+            self.assertTrue(all(p.poll() is not None for p in cap._procs))

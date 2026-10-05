@@ -169,6 +169,7 @@ class CaptureThread(threading.Thread):
             self.messages.append({"ts": time.time(), "from": "thread-tree", "text": f"capture stopped: {exc}"})
             log.error("capture stopped: %s", exc)
         finally:
+            self.stop()  # the sniffer script must not outlive tshark: it holds the serial port
             self.finished.set()
 
     def _pump(self, src, dst) -> None:
@@ -204,10 +205,11 @@ class CaptureThread(threading.Thread):
         except (EOFError, BrokenPipeError, OSError, struct.error):
             pass
         finally:
-            try:
-                dst.close()
-            except OSError:
-                pass
+            for stream in (dst, src):  # closing our end of the producer's pipe ends it (instead of blocking on a full pipe)
+                try:
+                    stream.close()
+                except OSError:
+                    pass
 
     def decode(self, number: int, timeout: float = 15.0) -> dict | None:
         """The full Wireshark decode of one kept frame (all layers and fields), without anything key-like."""
@@ -232,7 +234,18 @@ class CaptureThread(threading.Thread):
                 self.messages.append({"ts": time.time(), "from": source, "text": line})
                 log.info("%s: %s", source, line)
 
-    def stop(self) -> None:
+    def stop(self, wait: float = 3.0) -> None:
+        """End tshark and the sniffer script, and wait until they are gone: the serial port is free only then."""
         for p in self._procs:
             if p.poll() is None:
                 p.terminate()
+        for p in self._procs:
+            try:
+                p.wait(timeout=wait)
+            except subprocess.TimeoutExpired:
+                log.warning("process %s did not end: killing it", p.args[0] if isinstance(p.args, list) else p.args)
+                p.kill()
+                try:
+                    p.wait(timeout=wait)
+                except subprocess.TimeoutExpired:
+                    pass
