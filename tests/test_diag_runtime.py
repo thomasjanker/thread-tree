@@ -257,6 +257,7 @@ class DemoControllerTests(unittest.TestCase):
 class RunNowApiTests(ApiFixture, unittest.TestCase):
     class Stub:
         calls = 0
+        found = True
 
         def trigger(self):
             self.calls += 1

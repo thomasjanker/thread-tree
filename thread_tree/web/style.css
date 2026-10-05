@@ -213,3 +213,8 @@ nav button[aria-selected="true"] .icon { stroke: #fff; }
 .mesh-legend { max-width: 360px; font-size: 13px; } .mesh-legend h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
 .mesh-sample { display: block; overflow: visible; } .mesh-sample .mesh-link { stroke-width: 3; }
 .mesh-sample .mesh-badge text { font-size: 9px; }
+.sticks { display: inline-flex; gap: 6px; }
+.stick { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--line); color: var(--muted); }
+.stick-ok { color: var(--ok); border-color: var(--ok); } .stick-error { color: var(--crit); border-color: var(--crit); }
+.stick-idle { color: var(--warn); border-color: var(--warn); } .stick-none { opacity: .6; text-decoration: line-through; }
+[hidden] { display: none !important; }

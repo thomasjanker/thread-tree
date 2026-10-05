@@ -464,8 +464,28 @@ function renderSettings(message) {
       insecureConnection() ? h('p', { class: 'msg error' }, t('set.insecure')) : null,
       h('div', { class: 'toolbar' }, save, remove));
   }
-  dlg.replaceChildren(h('h2', {}, t('settings')), h('h3', {}, t('set.current')), info, form, msg,
+  const devices = (state.status?.sticks || []);
+  const stickList = state.status?.mode === 'run' ? [h('h3', {}, t('sticks.title')), devices.length
+    ? h('dl', { class: 'info' }, devices.map(s => [h('dt', {}, t(s.kind ? `sticks.${s.kind}` : 'sticks.other')),
+      h('dd', { class: 'mono' }, `${s.path} (USB ${s.usb}${s.product ? ', ' + s.product : ''})${s.used ? ' — ' + t('sticks.used') : ''}${s.error ? ' — ' + s.error : ''}`)]))
+    : h('p', { class: 'muted' }, t('sticks.none')), h('p', { class: 'muted small' }, t('sticks.help'))] : [];
+  dlg.replaceChildren(h('h2', {}, t('settings')), h('h3', {}, t('set.current')), info, form, msg, stickList,
     h('p', {}, h('button', { type: 'button', onclick: () => dlg.close() }, t('legend.close'))));
+}
+
+// ---- the USB sticks: plugged in, what for -------------------------------------
+function stickChip(kind, sticks) {
+  const s = sticks.find(x => x.kind === kind);
+  const state = !s ? 'none' : s.error ? 'error' : s.used ? 'ok' : 'idle';
+  const tip = !s ? t(`sticks.${kind}.none`) : `${t(`sticks.${kind}`)}: ${s.path} (USB ${s.usb})${s.error ? ' — ' + s.error : s.used ? '' : ' — ' + t('sticks.idle')}`;
+  return h('span', { class: `stick stick-${state}`, title: tip }, icon(kind === 'sniffer' ? 'antenna' : 'diag'), h('span', {}, t(`sticks.${kind}.short`)));
+}
+function renderSticks(st) {
+  const el = document.getElementById('sticks');
+  if (!el) return;
+  el.hidden = !st || st.mode !== 'run';
+  if (el.hidden) return;
+  fill(el, stickChip('sniffer', st.sticks || []), stickChip('diag', st.sticks || []));
 }
 
 // ---- main ------------------------------------------------------------------
@@ -503,6 +523,7 @@ function render() {
   let msg = null, settingsLink = false;
   if (st?.mode === 'run' && !st.decrypting) { msg = t('banner.nokey'); settingsLink = true; }
   if (st?.mode === 'run' && st.waiting_for_dataset) { msg = t('banner.waiting'); settingsLink = true; }
+  if (st?.waiting_for_sniffer && !st.diagnostics) { msg = t('banner.nosniffer'); settingsLink = false; }
   const sx = st?.stats || {};
   if (st?.mode === 'run' && sx.mle_failed > 0 && sx.mle_failed >= sx.mle_ok) { msg = t('banner.decrypt'); settingsLink = true; }
   if (st?.diagnostics_error && !msg) { msg = t('banner.diag') + st.diagnostics_error; settingsLink = false; }
@@ -510,8 +531,9 @@ function render() {
   if (state.notice) { msg = state.notice.text; settingsLink = false; }
   banner.hidden = !msg;
   fill(banner, msg, msg && settingsLink ? h('button', { type: 'button', style: 'margin-left:12px', onclick: openSettings }, t('settings')) : null);
+  renderSticks(st);
   pe.className = 'status' + (st && st.mode === 'run' && !st.capture_running ? ' bad' : '');
-  pe.textContent = !st ? '' : st.mode === 'demo' ? t('status.demo') : st.waiting_for_dataset ? t('status.waiting') : st.capture_running ? t('status.live') : t('status.stopped');
+  pe.textContent = !st ? '' : st.mode === 'demo' ? t('status.demo') : st.waiting_for_sniffer ? t('status.nosniffer') : st.waiting_for_dataset ? t('status.waiting') : st.capture_running ? t('status.live') : t('status.stopped');
 
   const view = document.getElementById('view');
   const topo = state.topo;

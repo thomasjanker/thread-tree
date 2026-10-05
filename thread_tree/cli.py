@@ -27,8 +27,9 @@ def _parser() -> argparse.ArgumentParser:
     common.add_argument("--port", type=int, default=8787)
     common.add_argument("--db", default="thread-tree.sqlite", help="persistence file")
     run = sub.add_parser("run", parents=[common], help="capture and serve")
-    run.add_argument("--source", required=True,
-                     help="nrf:PORT | pcap:FILE | iface:NAME | cmd:COMMAND | ek:FILE")
+    run.add_argument("--source", default="auto",
+                     help="auto (default: the sniffer stick, found by its USB identity) | nrf:PORT | pcap:FILE | "
+                          "iface:NAME | cmd:COMMAND | ek:FILE")
     run.add_argument("--channel", type=int, help="802.15.4 channel 11-26 for nrf: (default: from the dataset)")
     run.add_argument("--extcap-script", default=DEFAULT_EXTCAP_SCRIPT, help="Nordic nrf802154_sniffer.py")
     run.add_argument("--dataset", help="active dataset TLVs as hex; locks the UI form (prefer env THREAD_TREE_DATASET)")
@@ -36,10 +37,10 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--local-config-only", action="store_true",
                      help="only accept the dataset from this machine (e.g. through an SSH tunnel); by default "
                           "any machine that can reach the UI may enter it, and the key travels unencrypted over HTTP")
-    run.add_argument("--diag-port",
-                     help="serial device of a second nRF52840 with OpenThread CLI firmware (see docs/diagnostics.md), "
-                          "best /dev/serial/by-id/usb-...: it joins the network as an end device and asks the routers "
-                          "(active diagnostics)")
+    run.add_argument("--diag-port", default="auto",
+                     help="the diagnostic stick (nRF52840 with OpenThread CLI firmware, see docs/diagnostics.md): auto "
+                          "(default: found by its USB identity, used when plugged in), a serial device, or off; it joins "
+                          "the network as an end device and asks the routers (active diagnostics)")
     run.add_argument("--diag-interval", type=float, default=300.0,
                      help="seconds between two rounds of questions (default 300, from 10 to 3600)")
     run.add_argument("--tshark", default="tshark")
@@ -48,7 +49,7 @@ def _parser() -> argparse.ArgumentParser:
     dec = sub.add_parser("dataset", help="decode a dataset and print what it contains (no secrets)")
     dec.add_argument("tlvs", nargs="?", help="hex; default: env THREAD_TREE_DATASET")
     probe = sub.add_parser("diag-probe", help="test an nRF52840 with OpenThread CLI firmware as diagnostic node")
-    probe.add_argument("--port", help="serial device, best /dev/serial/by-id/usb-... (see --list-ports)")
+    probe.add_argument("--port", default="auto", help="serial device (default auto: the diagnostic stick, see --list-ports)")
     probe.add_argument("--list-ports", action="store_true", help="show serial devices and exit")
     probe.add_argument("--db", default="thread-tree.sqlite",
                        help="database whose <db>.dataset file holds the dataset to join with")
@@ -60,19 +61,23 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _diag_probe(args: argparse.Namespace) -> int:
-    from .diagprobe import list_ports, run_probe
+    from .diagprobe import run_probe
     from .otcli import OtCli
 
+    from .sticks import find, find_sticks
     if args.list_ports:
-        rows = list_ports()
-        for by_id, tty in rows:
-            print(f"{by_id} -> {tty}")
+        rows = find_sticks()
+        names = {"sniffer": "sniffer stick", "diag": "diagnostic stick", None: "other"}
+        for row in rows:
+            print(f"{row['path']} -> {row['tty']}  USB {row['usb']}  {row['product'] or ''}  [{names[row['kind']]}]")
         if not rows:
             print("no serial devices found")
         return 0
-    if not args.port:
-        print("--port is required (see --list-ports)", file=sys.stderr)
-        return 2
+    if not args.port or args.port == "auto":
+        args.port = find("diag")
+        if not args.port:
+            print("no diagnostic stick found (USB 1915:cafe); give --port (see --list-ports)", file=sys.stderr)
+            return 2
     dataset_hex = None
     if not args.no_join:
         path = Path(args.dataset_file or args.db + ".dataset")
@@ -144,7 +149,8 @@ def main(argv: list[str] | None = None) -> int:
                 cli_key=args.key or os.environ.get("THREAD_TREE_KEY"),
                 tshark=args.tshark, extra=args.tshark_arg, extcap_script=args.extcap_script,
                 allow_remote_config=not args.local_config_only,
-                diag_port=args.diag_port, diag_interval=args.diag_interval,
+                diag_port=None if args.diag_port in ("off", "none", "") else args.diag_port,
+                diag_interval=args.diag_interval,
                 settings_path=Path(args.db + ".settings.json"))
         except ValueError as exc:
             print(f"invalid dataset: {exc}", file=sys.stderr)
@@ -160,8 +166,8 @@ def main(argv: list[str] | None = None) -> int:
         sim.start()
     else:
         controller.start_capture()
-        if args.diag_port:
-            logging.info("active diagnostics through %s every %.0f s", args.diag_port,
+        if controller.diag_port:
+            logging.info("active diagnostics through %s every %.0f s", controller.diag_port,
                          min(3600.0, max(10.0, args.diag_interval)))
             controller.start_diagnostics()
 

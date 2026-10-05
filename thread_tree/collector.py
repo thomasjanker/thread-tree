@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 
 from . import addresses as A
+from . import sticks
 from .dataset import parse_dataset
 from .engine import DIAG_TTL, Engine
 from .otcli import OtCli, OtCliCancelled, OtCliError, OtCliTimeout
@@ -137,7 +138,11 @@ class DiagThread(threading.Thread):
             self._paused.set()
         with engine.lock:
             engine.diag_ttl = max(DIAG_TTL, 3 * self.interval)  # its answers stay current for three rounds
-        self._set(enabled=True, port=port, state="starting", error=None)
+        self.auto = port == "auto"  # find the stick by its USB identity (and again after it was unplugged)
+        self.found = not self.auto  # nothing is shown before a stick turned up
+        self.current_port: str | None = None
+        if self.found:
+            self._set(enabled=True, port=port, state="starting", error=None)
 
     # ---- status for the UI --------------------------------------------------
 
@@ -184,7 +189,20 @@ class DiagThread(threading.Thread):
             self._set(state="waiting for dataset", error=None)
             self._stop_evt.wait(5.0)
             return
-        cli = self.open_cli(self.port).open()
+        port = self.port
+        if self.auto:
+            port = sticks.find("diag")
+            if port is None:
+                if self.found:
+                    self._set(state="no stick", error=None)
+                self._stop_evt.wait(10.0)
+                return
+            if not self.found:
+                log.info("diagnostic stick: %s", port)
+                self.found = True
+                self._set(enabled=True, port=port, state="starting", error=None)
+        cli = self.open_cli(port).open()
+        self.current_port = port
         cli.cancel = self._stop_evt
         try:
             self._set(state="joining", error=None)

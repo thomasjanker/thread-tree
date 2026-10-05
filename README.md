@@ -62,10 +62,10 @@ see [Verification status](#verification-status).
 Both jobs use an nRF52840 USB stick (Nordic nRF52840 Dongle, Ebyte E104-BT5040U, …), but with **different firmware**.
 One stick does one job; for both you need two sticks. Either one is enough to start.
 
-| Job | Firmware | Where to get it | Start option |
+| Job | Firmware | Where to get it | Found as |
 |---|---|---|---|
-| **Sniffer** (passive: traffic, signal, behaviour) | Nordic's *nRF Sniffer for 802.15.4*, shows up as USB `1915:154b` | [firmware/nordic-sniffer/](firmware/nordic-sniffer/) (Nordic's license, not GPL) | `--source nrf:/dev/ttyACM…` |
-| **Diagnostic node** (active: asks the routers) | OpenThread CLI with `meshdiag`, built by this project's [workflow](.github/workflows/firmware-diag.yml), shows up as `OpenThread Device` | [release `firmware-diag-2026-10-03`](https://github.com/thomasjanker/thread-tree/releases/tag/firmware-diag-2026-10-03), steps in [docs/diagnostics.md](docs/diagnostics.md) | `--diag-port /dev/serial/by-id/…` |
+| **Sniffer** (passive: traffic, signal, behaviour) | Nordic's *nRF Sniffer for 802.15.4* | [firmware/nordic-sniffer/](firmware/nordic-sniffer/) (Nordic's license, not GPL) | USB `1915:154b` "nRF 802154 Sniffer" |
+| **Diagnostic node** (active: asks the routers) | OpenThread CLI with `meshdiag`, built by this project's [workflow](.github/workflows/firmware-diag.yml) | [release `firmware-diag-2026-10-03`](https://github.com/thomasjanker/thread-tree/releases/tag/firmware-diag-2026-10-03), steps in [docs/diagnostics.md](docs/diagnostics.md) | USB `1915:cafe` "OpenThread Device" |
 
 An ESP32-C6/H2 can also serve as sniffer through a bridge that writes pcap to stdout (`--source cmd:…`, untested).
 
@@ -80,17 +80,19 @@ python3 -m thread_tree demo            # simulated network: http://127.0.0.1:878
 With hardware, then open `http://<host>:8787` → **Settings** → enter the Thread dataset:
 
 ```sh
-python3 -m thread_tree run --source nrf:/dev/ttyACM0                       # sniffer only
-python3 -m thread_tree run --source nrf:/dev/ttyACM0 \
-    --diag-port /dev/serial/by-id/usb-Nordic_Semiconductor_nRF528xx_OpenThread_Device_…-if00   # both sticks
-python3 -m thread_tree run --source "cmd:sleep 1000000" --diag-port /dev/serial/by-id/…      # diagnostic node only
+python3 -m thread_tree run
 ```
 
-Other sources: `--source pcap:capture.pcapng` (replay), `iface:<interface>`, `cmd:<command writing pcap>`. Useful
-options: `--channel 17` (instead of the dataset's), `--diag-interval 600` (seconds between rounds, default 300),
-`--db <file>` (default `./thread-tree.sqlite`), `--host`/`--port` (default `0.0.0.0:8787`), `--local-config-only`.
-`python3 -m thread_tree diag-probe --list-ports` lists the serial devices; `python3 -m thread_tree dataset` decodes a
-dataset without printing secrets.
+That is all: the sticks are found by their USB identity (sniffer `1915:154b`, diagnostic stick `1915:cafe`) and used as
+soon as they are plugged in, also later or after unplugging. Sniffer only, diagnostic stick only, or both: the matching
+functions are available. The header shows which sticks are plugged in and in use (Settings lists every serial device);
+`python3 -m thread_tree diag-probe --list-ports` does the same on the command line.
+
+To choose yourself: `--source nrf:/dev/ttyACM0` (or `pcap:capture.pcapng` to replay, `iface:<interface>`,
+`cmd:<command writing pcap>`), `--diag-port /dev/serial/by-id/…` or `--diag-port off`. Other options: `--channel 17`
+(instead of the dataset's), `--diag-interval 600` (seconds between rounds, default 300), `--db <file>` (default
+`./thread-tree.sqlite`), `--host`/`--port` (default `0.0.0.0:8787`), `--local-config-only`.
+`python3 -m thread_tree dataset` decodes a dataset without printing secrets.
 
 **The Thread dataset** provides the network key (to decrypt), the channel, the PAN ID and the mesh-local prefix. Copy it
 from your border router (IKEA app: Hub settings → Thread network → More options → copy dataset; or
@@ -110,7 +112,7 @@ Wants=network-online.target
 User=pi
 WorkingDirectory=/home/pi/thread-tree
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/usr/bin/python3 -m thread_tree run --source nrf:/dev/ttyACM0 --diag-port /dev/serial/by-id/…
+ExecStart=/usr/bin/python3 -m thread_tree run
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=30
@@ -244,7 +246,7 @@ What worked in testing for the sniffer (a Raspberry Pi 2 is enough):
    (DIRIGERA's Zigbee is often on 11) shows `zbee_nwk` in `tshark -q -z io,phs`, Thread shows 6LoWPAN/MLE.
 5. Wireshark's default Thread settings fit; without the key the UI shows a warning.
 
-Use `/dev/serial/by-id/…` names when two sticks are plugged in: `ttyACM0` and `ttyACM1` can swap.
+The sticks are found automatically; `ttyACM0` and `ttyACM1` swapping after a reboot does not matter.
 
 ## Security
 

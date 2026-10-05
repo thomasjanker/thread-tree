@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from .capture import DEFAULT_EXTCAP_SCRIPT, CaptureThread, nrf_command
+from . import sticks
 from .collector import DiagThread
 from .dataset import Dataset, normalize_hex, parse_dataset
 from .engine import Engine
@@ -66,6 +67,9 @@ class Controller:
         self.origin: str | None = None
         self.editable, self.locked_reason = editable, locked_reason
         self.waiting = False
+        self.no_sniffer = False  # source "auto" and no sniffer stick plugged in
+        self.sniffer: str | None = None  # the stick the capture runs on
+        self._watching = False
         if cli_dataset:
             self.dataset, self.origin = parse_dataset(cli_dataset), "cli"
             self._dataset_hex = normalize_hex(cli_dataset)
@@ -151,24 +155,55 @@ class Controller:
     # ---- capture ------------------------------------------------------------
 
     def _resolve_source(self) -> str | None:
-        if self.source.startswith("nrf:"):
+        source = self.source
+        self.no_sniffer = False
+        if source == "auto":  # the sniffer stick, wherever it is plugged in
+            self.sniffer = sticks.find("sniffer")
+            if self.sniffer is None:
+                self.no_sniffer = True
+                return None
+            source = "nrf:" + self.sniffer
+        if source.startswith("nrf:"):
             channel = self.channel or (self.dataset.channel if self.dataset else None)
             if channel is None:
                 return None  # waiting for a dataset (or --channel)
-            return "cmd:" + nrf_command(self.source[4:], channel, self.extcap_script)
-        return self.source
+            return "cmd:" + nrf_command(source[4:], channel, self.extcap_script)
+        return source
 
     def start_capture(self) -> None:
         if self.mode != "run":
             return
         with self.lock:
+            if self.source == "auto" and not self._watching:
+                self._watching = True
+                threading.Thread(target=self._watch_sniffer, daemon=True, name="sticks").start()
             source = self._resolve_source()
-            self.waiting = source is None
+            self.waiting = source is None and not self.no_sniffer
             if source is None:
-                log.warning("waiting for a dataset: the sniffer channel is unknown")
+                log.warning("no sniffer stick found: waiting for one" if self.no_sniffer
+                            else "waiting for a dataset: the sniffer channel is unknown")
                 return
+            if self.source == "auto":
+                log.info("sniffer stick: %s", self.sniffer)
             self.capture = CaptureThread(self.engine, source, self.key, self.dataset, self.tshark, self.extra)
             self.capture.start()
+
+    def _watch_sniffer(self, every: float = 10.0) -> None:
+        """Source "auto": start the capture when a sniffer stick appears, and again after it was unplugged."""
+        failed_on, failures = None, 0
+        while True:
+            time.sleep(every if failures < 3 else 6 * every)
+            with self.lock:
+                cap = self.capture
+                if cap is not None and not cap.finished.is_set():
+                    failures = 0
+                    continue
+                if cap is not None:  # the capture ended (stick unplugged, tshark error ...)
+                    failures = failures + 1 if failed_on == self.sniffer else 1
+                    failed_on = self.sniffer
+                    self.capture = None
+                if sticks.find("sniffer") is not None:
+                    self.start_capture()
 
     def stop_capture(self) -> None:
         with self.lock:
@@ -277,6 +312,28 @@ class Controller:
         if self.diag is not None:
             self.start_diagnostics()
 
+    def _sticks(self, cap, diag_error: str | None) -> list[dict]:
+        """The USB serial devices plugged in, what they are and what they are used for (for the UI)."""
+        if self.mode != "run":
+            return []
+        diag_port = getattr(self.diag, "current_port", None) or (self.diag_port if self.diag_port != "auto" else None)
+        sniffer_port = self.sniffer or (self.source[4:] if self.source.startswith("nrf:") else None)
+        out = []
+        for s in sticks.find_sticks():
+            in_use = (s["kind"] == "sniffer" and sniffer_port in (s["path"], s["tty"])) or (
+                s["kind"] == "diag" and diag_port in (s["path"], s["tty"]))
+            error = None
+            if in_use and s["kind"] == "sniffer" and cap is not None and cap.error:
+                error = cap.error
+            elif in_use and s["kind"] == "diag":
+                error = diag_error
+            out.append({**s, "used": bool(in_use), "error": error})
+        return out
+
+    def _diag_ready(self) -> bool:
+        """A diagnostic node is running: a fixed port, or "auto" and a stick was found."""
+        return self.diag is not None and self.diag.found
+
     def run_diagnostics(self) -> dict:
         """Ask for a round now. Returns at once: the answers arrive within seconds to a minute."""
         with self.lock:
@@ -286,16 +343,16 @@ class Controller:
                 from .simulate import refresh_active
                 refresh_active(self.engine, time.time())
                 return {"queued": True}
-            if self.diag is None:
-                raise DiagUnavailable("active diagnostics are not set up: start with --diag-port")
+            if not self._diag_ready():
+                raise DiagUnavailable("no diagnostic stick found (see --diag-port)")
             self.diag.trigger()
             return {"queued": True}
 
     def set_diag_enabled(self, enabled: bool) -> dict:
         """The UI switch: off = the node stays in the network but asks nothing. Kept across restarts."""
         with self.lock:
-            if self.mode != "demo" and self.diag is None:
-                raise DiagUnavailable("active diagnostics are not set up: start with --diag-port")
+            if self.mode != "demo" and not self._diag_ready():
+                raise DiagUnavailable("no diagnostic stick found (or started with --diag-port off)")
             self.diag_paused = not enabled
             self._save_settings(diag_paused=self.diag_paused)
             if self.mode == "demo":
@@ -338,6 +395,8 @@ class Controller:
                 "channel": (self.channel or (ds.channel if ds else None)),
                 "decrypting": bool(self.key), "time": time.time(),
                 "stats": dict(cap.stats) if cap else {},
-                "diagnostics": self.mode == "demo" or self.diag is not None, "diagnostics_error": diag_error,
+                "diagnostics": self.mode == "demo" or self._diag_ready(), "diagnostics_error": diag_error,
+                "sniffer": self.sniffer, "waiting_for_sniffer": self.mode == "run" and self.no_sniffer,
+                "sticks": self._sticks(cap, diag_error),
                 "diagnostics_paused": self.diag_paused,
             }
