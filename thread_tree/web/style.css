@@ -219,3 +219,5 @@ nav button[aria-selected="true"] .icon { stroke: #fff; }
 .stick-idle { color: var(--warn); border-color: var(--warn); } .stick-none { opacity: .6; text-decoration: line-through; }
 [hidden] { display: none !important; }
 .live-messages { font-size: 12px; background: var(--surface); border: 1px solid var(--line); border-radius: 6px; padding: 8px; max-height: 220px; overflow: auto; white-space: pre-wrap; }
+.toolbar button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.toolbar { align-items: center; flex-wrap: wrap; }

@@ -28,6 +28,20 @@ function liveDst(f) {
   return id ? liveWho(id) : liveWho(null, f.dst16);
 }
 
+// hiding the acknowledgements is remembered in this browser
+function liveHideAcks() {
+  if (state.liveHideAcks === undefined) {
+    try { state.liveHideAcks = localStorage.getItem('liveHideAcks') === '1'; } catch { state.liveHideAcks = false; }
+  }
+  return state.liveHideAcks;
+}
+
+function toggleAcks() {
+  state.liveHideAcks = !liveHideAcks();
+  try { localStorage.setItem('liveHideAcks', state.liveHideAcks ? '1' : '0'); } catch { /* not available */ }
+  render();
+}
+
 function renderLive() {
   const c = state.live || {};
   const st = c.stats || {};
@@ -40,7 +54,10 @@ function renderLive() {
     if (fresh) { fresh.focus(); fresh.setSelectionRange(fresh.value.length, fresh.value.length); }
   });
   const q = (state.liveFilter || '').trim().toLowerCase();
+  const hideAcks = liveHideAcks();
+  const acks = (state.liveFrames || []).filter(f => f.kind === 'ack').length;
   const rows = (state.liveFrames || []).filter(f => {
+    if (hideAcks && f.kind === 'ack') return false;
     if (!q) return true;
     const n = f.src ? state.topo?.nodes[f.src] : null;
     return [n ? nodeName(n) : '', f.src, f.src16, f.dst, f.dst16, t('kind.' + f.kind), f.mle !== null ? MLE_COMMANDS[f.mle] : ''].join(' ').toLowerCase().includes(q);
@@ -68,7 +85,10 @@ function renderLive() {
       fact(t('live.last'), age === null ? t('live.none') : fmtDuration(age))),
     c.messages && c.messages.length ? section('live.messages', h('pre', { class: 'live-messages' },
       c.messages.slice(-15).map(m => `${new Date(m.ts * 1000).toLocaleTimeString(state.lang)}  ${m.from}: ${m.text}\n`))) : null,
-    h('div', { class: 'toolbar' }, input),
+    h('div', { class: 'toolbar' }, input,
+      h('button', { type: 'button', class: `ibtn${hideAcks ? ' active' : ''}`, 'aria-pressed': String(hideAcks), onclick: toggleAcks },
+        t(hideAcks ? 'live.acks.show' : 'live.acks.hide')),
+      hideAcks && acks ? h('span', { class: 'muted small' }, fillTemplate(t('live.acks.hidden'), { n: acks }, (k, v) => v)) : null),
     rows.length ? h('div', { class: 'tablewrap' }, h('table', { class: 'logtable' },
       h('thead', {}, h('tr', {}, ...['log.col.time', 'live.from', 'live.to', 'live.kind', 'diag.link.signal', 'live.len'].map(k => h('th', {}, t(k))))),
       h('tbody', {}, body))) : h('p', { class: 'muted' }, t('live.empty')),
