@@ -176,6 +176,20 @@ class RawFrameTests(unittest.TestCase):
         c = Controller(Engine(), "run", "auto", tshark="definitely-not-installed")
         self.assertIsNone(c.live_frame(1))
 
+    def test_pcap_stream_reaches_tshark(self):
+        """Through real pipes: the producer's pcap arrives at tshark byte for byte, and the frames are kept."""
+        with tempfile.TemporaryDirectory() as d:
+            fake, got, src = Path(d) / "tshark", Path(d) / "got.pcap", Path(d) / "in.pcap"
+            src.write_bytes(pcap([b"\x01\x02", b"\x03\x04\x05"]))
+            fake.write_text(f"#!/bin/sh\n[ \"$1\" = -G ] && exit 0\ncat > {got}\n")
+            fake.chmod(0o755)
+            cap = CaptureThread(Engine(), f"cmd:cat {src}", tshark=str(fake))
+            cap.start()
+            self.assertTrue(wait_for(lambda: cap.finished.is_set(), timeout=20))
+            self.assertIsNone(cap.error)
+            self.assertEqual(got.read_bytes(), src.read_bytes())
+            self.assertEqual(len(cap.raw), 2)
+
     def test_sniffer_script_ends_with_tshark(self):
         """The sniffer script holds the serial port: when tshark ends, it must end too, or a restart cannot open it."""
         with tempfile.TemporaryDirectory() as d:

@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import logging
 import os
@@ -152,15 +153,16 @@ class CaptureThread(threading.Thread):
                 self._procs.append(prod)
                 threading.Thread(target=self._collect, args=(prod.stderr, "sniffer"), daemon=True).start()
             log.info("starting tshark (key %s)", "set" if self.network_key else "NOT set: frames stay encrypted")
+            # binary pipes: the pcap stream goes in as bytes; the EK output is read as text
             proc = subprocess.Popen(argv, stdin=subprocess.PIPE if prod else None, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True)
+                                    stderr=subprocess.PIPE)
             self._procs.append(proc)
             if prod:  # the pcap stream passes through us: the raw frames are kept for the full decode
                 threading.Thread(target=self._pump, args=(prod.stdout, proc.stdin), daemon=True).start()
             threading.Thread(target=self._collect, args=(proc.stderr, "tshark"), daemon=True).start()
             handler = self.handler = Handler(self.engine, chosen)
             self.stats = handler.stats
-            for packet in iter_ek(proc.stdout):
+            for packet in iter_ek(io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="replace")):
                 handler.handle(packet)
             if proc.wait() not in (0, -15):
                 raise RuntimeError(f"tshark exited with status {proc.returncode}")

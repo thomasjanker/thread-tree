@@ -228,6 +228,9 @@ class DiagThread(threading.Thread):
 
     def _ensure_end_device(self, cli: OtCli) -> None:
         names = cli.commands()
+        if "meshdiag" not in names:  # ask once more: right after plugging in, the answer to `help` can be cut short
+            cli._commands = None
+            names = cli.commands()
         if "meshdiag" not in names:
             raise CollectorError("this firmware has no meshdiag command: use the build from docs/diagnostics.md")
         state = (cli.command("state") or [""])[0]
