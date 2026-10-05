@@ -200,3 +200,26 @@ class RawFrameTests(unittest.TestCase):
             cap.start()
             self.assertTrue(wait_for(lambda: cap.finished.is_set(), timeout=20))
             self.assertTrue(all(p.poll() is not None for p in cap._procs))
+
+
+class PlaceholderTests(unittest.TestCase):
+    def test_frames_heard_before_the_mac_point_to_the_device(self):
+        """A device first heard by its RLOC16 only; later its MAC is learned: its kept frames show the device."""
+        engine, h = handler()
+        h.handle(pkt(0, wpan_src16="0x0c01", wpan_cmd="4", wpan_dst16="0x0c00", wpan_seq_no="1"))
+        self.assertEqual(h.recent[0]["src"], "rloc16:0c01")
+        engine.on_diag_childtable(T_MS / 1000 + 5, [])  # nothing yet
+        with engine.lock:
+            engine.node_for(T_MS / 1000 + 10, ext="dd" * 8, rloc16=0x0C01, touch=False)  # e.g. the active diagnostics
+        c = Controller(engine, "run", "auto", tshark="definitely-not-installed")
+        c.capture = type("Cap", (), {"handler": h, "finished": __import__("threading").Event(), "error": None,
+                                      "stats": {}, "messages": [], "raw": []})()
+        self.assertEqual(c.live()["frames"][0]["src"], "dd" * 8)
+        # the RLOC16 goes to another device later: its frames are not attributed to the first one
+        h.handle(pkt(60000, wpan_src16="0x0c01", wpan_cmd="4", wpan_dst16="0x0c00", wpan_seq_no="2"))
+        self.assertEqual(c.live()["frames"][1]["src"], "dd" * 8)  # bound to the device now: it is still its RLOC16
+        with engine.lock:
+            engine.node_for(T_MS / 1000 + 70, ext="ee" * 8, rloc16=0x0C01, touch=False)
+        h.handle(pkt(80000, wpan_src16="0x0c01", wpan_cmd="4", wpan_dst16="0x0c00", wpan_seq_no="3"))
+        frames = c.live()["frames"]
+        self.assertEqual([f["src"] for f in frames], ["dd" * 8, "dd" * 8, "ee" * 8])

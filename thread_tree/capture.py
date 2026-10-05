@@ -162,8 +162,9 @@ class CaptureThread(threading.Thread):
             threading.Thread(target=self._collect, args=(proc.stderr, "tshark"), daemon=True).start()
             handler = self.handler = Handler(self.engine, chosen)
             self.stats = handler.stats
-            for packet in iter_ek(io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="replace")):
-                handler.handle(packet)
+            with io.TextIOWrapper(proc.stdout, encoding="utf-8", errors="replace") as out:
+                for packet in iter_ek(out):
+                    handler.handle(packet)
             if proc.wait() not in (0, -15):
                 raise RuntimeError(f"tshark exited with status {proc.returncode}")
         except Exception as exc:  # surfaced via /api/status
@@ -230,11 +231,12 @@ class CaptureThread(threading.Thread):
     def _collect(self, stream, source: str) -> None:
         """Lines a process prints on stderr: into the log and the live view, with anything that looks like a key masked."""
         from .diagprobe import redact
-        for raw in stream:
-            line = redact((raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw).rstrip(), (self.network_key or "",))
-            if line:
-                self.messages.append({"ts": time.time(), "from": source, "text": line})
-                log.info("%s: %s", source, line)
+        with stream:
+            for raw in stream:
+                line = redact((raw.decode("utf-8", "replace") if isinstance(raw, bytes) else raw).rstrip(), (self.network_key or "",))
+                if line:
+                    self.messages.append({"ts": time.time(), "from": source, "text": line})
+                    log.info("%s: %s", source, line)
 
     def stop(self, wait: float = 3.0) -> None:
         """End tshark and the sniffer script, and wait until they are gone: the serial port is free only then."""

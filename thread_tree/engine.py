@@ -90,6 +90,8 @@ class Engine:
         self.lock = threading.RLock()
         self.nodes: dict[str, Node] = {}
         self.rloc_index: dict[int, str] = {}
+        # placeholder id -> [(time of the merge, stable id)]: frames kept from before the MAC was known point to it
+        self.aliases: dict[str, list[tuple[float, str]]] = {}
         self.links: dict[tuple[int, int], dict] = {}  # (src router id, dst router id) -> metrics
         self.leaders: dict[int, int] = {}  # partition id -> leader router id
         self.partition_seen: dict[int, float] = {}  # partition id -> last leader data
@@ -237,7 +239,21 @@ class Engine:
         node.behavior["rloc_ts"] = ts  # when it changed: the history dates the parent change to this moment
         self.rloc_index[rloc16] = node.id
 
+    def resolve_id(self, nid: str | None, ts: float) -> str | None:
+        """The id a frame heard at ts belongs to now: a placeholder (RLOC16 only) that was merged into the device
+        once its MAC was known. The same RLOC16 can later belong to another device: the merge time tells which."""
+        for _ in range(8):  # a merge into a node that was merged again
+            if nid is None or nid in self.nodes:
+                return nid
+            into = next((into for until, into in self.aliases.get(nid, []) if ts <= until), None)
+            if into is None:
+                return nid  # gone (pruned) or never merged: the id as it was
+            nid = into
+        return nid
+
     def _merge(self, prov: Node, into: Node) -> None:
+        self.aliases.setdefault(prov.id, []).append((max(self.clock, prov.last_seen), into.id))
+        del self.aliases[prov.id][:-20]
         for addr, (first, last) in prov.addresses.items():
             cur = into.addresses.setdefault(addr, [first, last])
             cur[0], cur[1] = min(cur[0], first), max(cur[1], last)

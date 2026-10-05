@@ -312,12 +312,24 @@ class Controller:
         if self.diag is not None:
             self.start_diagnostics()
 
+    def _resolved(self, frame: dict) -> dict:
+        """A kept frame with the device ids of now: placeholders merged since point to the device."""
+        e, ts = self.engine, frame["ts"]
+        out = dict(frame)
+        for key in ("src", "answers"):
+            if out.get(key):
+                out[key] = e.resolve_id(out[key], ts)
+        if out.get("mesh"):
+            out["mesh"] = {k: e.resolve_id(v, ts) if k in ("orig", "dest") and v and not str(v).startswith("0x") else v
+                           for k, v in out["mesh"].items()}
+        return out
+
     def live(self, since: int = 0) -> dict:
         """The live view: frames newer than `since` (sequence number) and the state of the capture."""
         with self.lock:
             cap = self.capture
             handler = cap.handler if cap is not None else None
-            frames = [f for f in (handler.recent if handler else []) if f["seq"] > since]
+            frames = [self._resolved(f) for f in (handler.recent if handler else []) if f["seq"] > since]
             last = handler.recent[-1]["ts"] if handler and handler.recent else None
             minute = sum(1 for f in (handler.recent if handler else []) if last is not None and f["ts"] >= last - 60)
             ds = self.dataset

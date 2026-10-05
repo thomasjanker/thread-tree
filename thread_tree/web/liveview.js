@@ -31,7 +31,7 @@ const ICMP_TYPES = {1: 'Destination Unreachable', 3: 'Time Exceeded', 128: 'Echo
 function liveWho(id, short) {
   const n = id ? state.topo?.nodes[id] : null;
   if (n) return nodeLinkTo(id, nodeName(n));
-  if (id) return h('span', { class: 'mono' }, id.length === 16 ? fmtMac(id) : id);
+  if (id && !id.startsWith('rloc16:')) return h('span', { class: 'mono' }, id.length === 16 ? fmtMac(id) : id);
   return h('span', { class: 'mono muted' }, short || '–');
 }
 
