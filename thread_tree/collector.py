@@ -13,6 +13,7 @@ import time
 from collections.abc import Callable
 
 from . import addresses as A
+from . import behavior as B
 from . import sticks
 from .dataset import parse_dataset
 from .engine import DIAG_TTL, Engine
@@ -26,6 +27,9 @@ NO_DETAIL_BACKOFF = 6 * 3600.0      # a router that does not answer the detail q
 VENDOR_RETRY = 6 * 3600.0           # vendor data that is missing is asked for again after this long
 VENDOR_TLVS = "25 26 27 28"         # vendor name, model, software version, Thread stack version
 VENDOR_PER_ROUND = 3                # a few per round, so one round stays short
+MAC_TLVS = "0 3"                    # extended MAC address, timeout (of a sleepy child)
+MAC_PER_ROUND = 2                   # children asked for their MAC per round (a sleepy one answers on its next poll)
+MAC_RETRY = 3600.0                  # a child that did not answer is asked again after this long
 MAX_INTERVAL = 3600.0               # longer than this and the answers would be stale before the next round
 Run = Callable[..., list[str]]      # run(command, timeout) -> output lines; raises OtCliError / OtCliTimeout
 
@@ -50,8 +54,50 @@ def parse_vendor(lines: list[str]) -> dict | None:
     return info or None
 
 
+def parse_mac(lines: list[str]) -> tuple[str | None, int | None]:
+    """Output of `networkdiagnostic get <addr> 0 3`: the extended MAC address and the timeout."""
+    kv = parse_keyvalues(lines)
+    ext = A.normalize_ext(kv.get("Ext Address", "").strip("'\" ")) if kv.get("Ext Address") else None
+    return ext, _int((kv.get("Timeout") or "").split()[0] if kv.get("Timeout") else None)
+
+
+def _mac_candidates(engine: Engine, now: float, tried: dict[int, float]) -> list[tuple[int, int, float]]:
+    """(rank, RLOC16, answer time limit) of children known only by their RLOC16: neither the sniffer nor the
+    child tables (Thread 1.3 routers do not answer those) told their MAC. Always-listening ones first; a sleepy
+    child gets the message from its parent on its next poll, so it may take a poll period to answer."""
+    out = []
+    for n in engine.nodes.values():
+        if n.ext is not None or n.rloc16 is None or A.is_router_rloc(n.rloc16) or tried.get(n.rloc16, 0) > now:
+            continue
+        usual = B.usual_interval(n.behavior)
+        limit = 20.0 if n.rx_on_idle else min(120.0, max(30.0, 1.5 * (usual or 60.0) + 15.0))
+        out.append((0 if n.rx_on_idle else 1, n.rloc16, limit))
+    return sorted(out)
+
+
+def _ask_macs(run: Run, engine: Engine, now: float, tried: dict[int, float], budget: int) -> int:
+    prefix = engine.ml_prefix
+    if budget <= 0 or prefix is None:
+        return 0
+    with engine.lock:
+        candidates = _mac_candidates(engine, now, tried)
+    learned = 0
+    for _, rloc16, limit in candidates[:budget]:
+        tried[rloc16] = now + MAC_RETRY
+        try:
+            ext, timeout = parse_mac(run(f"networkdiagnostic get {A.rloc_address(prefix, rloc16)} {MAC_TLVS}", limit))
+        except (OtCliError, OtCliTimeout):
+            continue  # does not answer (or not in time): asked again later
+        if ext:
+            engine.on_diag_mac(now, rloc16, ext, timeout)
+            tried.pop(rloc16, None)
+            learned += 1
+    return learned
+
+
 def collect_round(run: Run, engine: Engine, now: float, no_detail: dict[int, float],
-                  vendor_per_round: int = VENDOR_PER_ROUND) -> dict:
+                  vendor_per_round: int = VENDOR_PER_ROUND, mac_tried: dict[int, float] | None = None,
+                  mac_per_round: int = MAC_PER_ROUND) -> dict:
     """One round: topology, then per router its children and neighbour table, then Network Data and vendor data.
     no_detail maps the RLOC16 of routers that did not answer the detail queries to the time until which they are
     not asked again; the function updates it."""
@@ -85,6 +131,7 @@ def collect_round(run: Run, engine: Engine, now: float, no_detail: dict[int, flo
 
     engine.on_diag_netdata(now, parse_netdata(run("netdata show", 15)))
     summary["vendor"] = _ask_vendors(run, engine, now, vendor_per_round)
+    summary["macs"] = _ask_macs(run, engine, now, {} if mac_tried is None else mac_tried, mac_per_round)
     return summary
 
 
@@ -131,6 +178,7 @@ class DiagThread(threading.Thread):
         self.interval, self.open_cli, self.clock = min(MAX_INTERVAL, max(10.0, interval)), open_cli, clock
         self.join_timeout, self.poll, self.retry_delay = join_timeout, poll, retry_delay
         self.no_detail: dict[int, float] = {}
+        self.mac_tried: dict[int, float] = {}  # RLOC16 of a child asked for its MAC -> when to ask again
         self._stop_evt = threading.Event()
         self._wake = threading.Event()
         self._paused = threading.Event()  # set: stay joined, but ask nothing (switched off in the UI)
@@ -215,7 +263,7 @@ class DiagThread(threading.Thread):
                     continue
                 self._set(state="querying", paused=False)
                 started = self.clock()
-                summary = collect_round(cli.command, self.engine, started, self.no_detail)
+                summary = collect_round(cli.command, self.engine, started, self.no_detail, mac_tried=self.mac_tried)
                 self._set(state="idle", error=None, ts=started, duration=self.clock() - started,
                           routers=summary["routers"], children=summary["children"], failures=summary["failures"],
                           vendor=summary["vendor"], next=started + self.interval)

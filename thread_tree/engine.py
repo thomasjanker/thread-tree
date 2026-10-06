@@ -778,6 +778,17 @@ class Engine:
             self.contexts.update(contexts)
             self.dirty = True
 
+    def on_diag_mac(self, ts: float, rloc16: int, ext: str, timeout: int | None = None) -> None:
+        """A child answered a diagnostic query with its MAC: the device known only by its RLOC16 gets its identity."""
+        with self.lock:
+            node = self.node_for(ts, ext=ext, rloc16=rloc16, touch=False)
+            if node is None:
+                return
+            node.last_diag = max(node.last_diag, ts)
+            if timeout and not node.child_timeout:
+                node.child_timeout = timeout
+            self.dirty = True
+
     def on_diag_vendor(self, ts: float, rloc16: int, info: dict | None) -> None:
         """Vendor data of the device with this RLOC16; info None if it did not answer (do not ask again at once)."""
         with self.lock:

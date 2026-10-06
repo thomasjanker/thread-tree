@@ -248,7 +248,10 @@ and runs a round of questions every `--diag-interval` seconds: `meshdiag topolog
 addresses, children), per router its child and neighbour tables, Network Data, and manufacturer / model of a few devices
 per round. It fills in what the sniffer cannot hear and shows weak links by what the routers lost. The stick shows up as
 a device (tag *diagnostic node*) and keeps the dataset in its flash. Routers with an older Thread stack (1.3) do not answer
-the detail queries; they get a note and are asked again after 6 hours. Details, flashing and limits:
+the detail queries; they get a note and are asked again after 6 hours. Their children stay known by their RLOC16 only
+until the sniffer hears a frame with their MAC; the diagnostic node therefore asks such children directly for their MAC
+(`networkdiagnostic get <RLOC> 0 3`, two per round; a sleepy child answers on its next poll, one that does not answer is
+asked again after an hour). Details, flashing and limits:
 [docs/diagnostics.md](docs/diagnostics.md).
 
 ## Raspberry Pi setup

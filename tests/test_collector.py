@@ -274,3 +274,46 @@ class FailureTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChildMacTests(unittest.TestCase):
+    """Children known only by their RLOC16 (their router does not answer the child table) are asked for their MAC."""
+
+    def setUp(self):
+        self.engine = Engine(ml_prefix=ML_PREFIX)
+        with self.engine.lock:
+            self.engine.node_for(1000.0, ext="a604009ec59510b2", rloc16=0x1400)
+            self.engine.node_for(1000.0, rloc16=0x140A)  # heard by its short address only
+        self.asked = []
+
+    def run_cli(self, answer):
+        def run(cmd, timeout=None):
+            self.asked.append((cmd, timeout))
+            if isinstance(answer, Exception):
+                raise answer
+            return answer
+        return run
+
+    def test_the_answer_gives_the_device_its_mac(self):
+        from thread_tree.collector import _ask_macs
+        answer = ["DIAG_GET.rsp/ans from fdca:fe00:0:1:0:ff:fe00:140a: 0008...", "Ext Address: '1a2b3c4d5e6f7081'", "Timeout: 240"]
+        tried = {}
+        self.assertEqual(_ask_macs(self.run_cli(answer), self.engine, 2000.0, tried, 2), 1)
+        cmd, timeout = self.asked[0]
+        self.assertTrue(cmd.startswith("networkdiagnostic get fdca:fe00:1:1:0:ff:fe00:140a 0 3"), cmd)
+        self.assertGreaterEqual(timeout, 30)  # a sleepy child answers on its next poll
+        node = self.engine.nodes["1a2b3c4d5e6f7081"]
+        self.assertEqual((node.rloc16, node.child_timeout), (0x140A, 240))
+        self.assertNotIn("rloc16:140a", self.engine.nodes)
+        self.assertEqual(_ask_macs(self.run_cli(answer), self.engine, 2100.0, tried, 2), 0)  # known now: not asked again
+        self.assertEqual(len(self.asked), 1)
+
+    def test_no_answer_is_asked_again_later(self):
+        from thread_tree.collector import MAC_RETRY, _ask_macs
+        tried = {}
+        _ask_macs(self.run_cli(OtCliTimeout("no answer")), self.engine, 2000.0, tried, 2)
+        _ask_macs(self.run_cli(OtCliTimeout("no answer")), self.engine, 2300.0, tried, 2)
+        self.assertEqual(len(self.asked), 1)
+        _ask_macs(self.run_cli(OtCliTimeout("no answer")), self.engine, 2000.0 + MAC_RETRY + 1, tried, 2)
+        self.assertEqual(len(self.asked), 2)
+        self.assertIn("rloc16:140a", self.engine.nodes)
