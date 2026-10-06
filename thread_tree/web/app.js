@@ -106,9 +106,10 @@ function glyph(n, cx, cy, r) {
   const cls = `glyph role-${n.role}`;
   return [s('circle', { cx, cy, r, class: cls }), s('text', { x: cx, y: cy + 4, class: 'glyph-txt' }, t('role.short.' + n.role))];
 }
-function nodeCard(n, x, y, onclick) {
+function nodeCard(n, x, y, onclick, cost) {
   const g = s('g', { class: `node${n.online || n.placeholder ? '' : ' offline'}${state.selected === n.id ? ' selected' : ''}${n.placeholder ? ' placeholder' : ''}`, transform: `translate(${x},${y})`, onclick });
-  g.append(s('title', {}, [nodeName(n), n.name ? hwId(n) : null, n.rloc16, roleLabel(n.role)].filter(Boolean).join(' · ')));
+  g.append(s('title', {}, [nodeName(n), n.name ? hwId(n) : null, n.rloc16, roleLabel(n.role),
+    cost !== undefined && cost !== null ? tfill('tree.cost.tip', { cost }) : null].filter(Boolean).join(' · ')));
   g.append(s('rect', { class: 'card', width: CARD_W, height: CARD_H, rx: 8 }));
   g.append(...glyph(n, 20, CARD_H / 2, 12));
   g.append(s('text', { x: 40, y: 16 }, nodeName(n)));
@@ -118,6 +119,10 @@ function nodeCard(n, x, y, onclick) {
   }
   if (n.health === 'warn' || n.health === 'crit') {  // something to look at: see the Diagnosis view
     g.append(s('circle', { cx: 6, cy: 6, r: 5, class: `dot-svg dot-${n.health}` }, s('title', {}, t('sev.' + n.health))));
+  }
+  if (cost !== undefined && cost !== null && n.role === 'router') {  // route cost to the leader
+    g.append(s('text', { x: CARD_W - (!n.placeholder && !n.heard ? 22 : 8), y: CARD_H - 7, class: 'cost-txt', 'text-anchor': 'end' },
+      tfill('tree.cost', { cost })));
   }
   if (n.border_router) {
     g.append(s('rect', { x: CARD_W - 30, y: 5, width: 24, height: 15, rx: 4, class: 'badge-br' }));
@@ -141,9 +146,14 @@ function renderTree(p) {
       const path = s('path', { class: `edge ${kind}`, d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, 'stroke-width': w });
       if (kind === 'unknown') path.append(s('title', {}, t('unknown-link')));
       edges.append(path);
+      if (kind === 'link' && c.edge.cost) {  // link cost between two routers, in the middle of the line
+        const tip = s('title', {}, tfill('tree.linkcost.tip', { cost: c.edge.cost, lq: c.edge.lq }));
+        edges.append(s('g', { class: `edge-cost lq${c.edge.lq}` }, s('circle', { cx: mx, cy: (y1 + y2) / 2, r: 9 }),
+          s('text', { x: mx, y: (y1 + y2) / 2 + 4, 'text-anchor': 'middle' }, String(c.edge.cost)), tip));
+      }
       go(c);
     }
-    nodes.append(nodeCard(state.topo.nodes[n.id], a.x, a.y, () => select(n.id)));
+    nodes.append(nodeCard(state.topo.nodes[n.id], a.x, a.y, () => select(n.id), n.cost));
   })(p.root);
   svg.append(edges, nodes);
   return svg;
@@ -362,6 +372,8 @@ function renderLegend() {
     grid([h('span', { class: 'chip', style: 'background:var(--router)' }, '━'), t('legend.edge.link')],
       [h('span', { class: 'chip', style: 'background:var(--line);color:var(--text)' }, '─'), t('legend.edge.child')],
       [h('span', { class: 'chip', style: 'background:var(--muted)' }, '┄'), t('legend.edge.unknown')],
+      [h('span', { class: 'mesh-badge lq-3' }, '1'), t('legend.tree.linkcost')],
+      [h('span', { class: 'cost-chip' }, tfill('tree.cost', { cost: 3 })), t('legend.tree.cost')],
       [h('span', { class: 'mesh-badge lq-3' }, '3'), t('legend.mesh.lq')],
       [h('span', { class: 'mesh-badge lq-1 lossy' }, '1'), t('legend.mesh.loss')]),
     h('h3', {}, t('legend.types')),

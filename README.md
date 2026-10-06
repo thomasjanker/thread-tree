@@ -132,7 +132,9 @@ journalctl -u thread-tree -f          # log; after an update: git pull && sudo s
 | ![Mesh view](docs/screenshots/mesh.png) | ![Diagnosis overview](docs/screenshots/diagnosis.png) |
 
 - **Tree / Mesh / Table:** click a device for its detail panel. A dotted circle marks a device the sniffer never heard
-  directly; a coloured dot a warning or critical finding.
+  directly; a coloured dot a warning or critical finding. In the tree, the circle on a line between two routers is its
+  link cost (1 / 2 / 4 for link quality 3 / 2 / 1, the weaker direction counts) and *cost n* on a router its route cost
+  to the leader along the path shown: the path Thread chooses, computed from the link qualities the routers advertise.
 - **Names:** type a name in the detail panel. It is bound to the device's MAC address, so it stays when the device
   changes its parent. A device known only by its short address can be named too, with a warning.
 - **Matching with Home Assistant:** paste what HA shows under "Matter info" into the table's filter: a MAC address (8

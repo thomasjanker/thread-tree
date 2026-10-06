@@ -224,3 +224,8 @@ nav button[aria-selected="true"] .icon { stroke: #fff; }
 tr.live-detail td { background: var(--bg); }
 .decode { margin-top: 8px; font-size: 12px; } .decode details { margin-left: 14px; } .decode > details { margin-left: 0; }
 .decode summary { cursor: pointer; font-weight: 600; } .decode-leaf { margin-left: 14px; word-break: break-all; }
+svg text.cost-txt { fill: var(--muted); font-size: 10px; font-weight: 600; }
+.cost-chip { font-size: 11px; font-weight: 600; color: var(--muted); }
+.edge-cost circle { fill: var(--surface); stroke-width: 1.5; stroke: var(--ok); }
+.edge-cost.lq2 circle { stroke: var(--warn); } .edge-cost.lq1 circle { stroke: var(--crit); }
+svg .edge-cost text { font-size: 10px; font-weight: 700; }

@@ -111,7 +111,7 @@ class OneWayLinkTests(unittest.TestCase):
         e = network()
         e.on_route64(1.0, 0x0000, [(9, 3, 1, 1)])
         kinds = {c["id"]: c["edge"] for c in snapshot(e, now=2.0)["partitions"][0]["root"]["children"]}
-        self.assertEqual(kinds["bb" * 8], {"kind": "link", "lq": 1})
+        self.assertEqual(kinds["bb" * 8], {"kind": "link", "lq": 1, "cost": 4})
 
 
 class PersistRaceTests(unittest.TestCase):

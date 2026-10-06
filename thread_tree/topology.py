@@ -122,7 +122,7 @@ def _partition(engine: Engine, pid: int, members: list[dict], nodes: dict, links
     leader = routers.get(leader_rid) if leader_rid is not None else None
 
     if leader is not None:
-        root = {"id": leader["id"], "edge": {"kind": "root"}, "children": []}
+        root = {"id": leader["id"], "edge": {"kind": "root"}, "children": [], "cost": 0}
     else:
         root_id = f"partition:{pid}:root"
         _placeholder(nodes, root_id, role="leader-unknown")
@@ -149,8 +149,9 @@ def _partition(engine: Engine, pid: int, members: list[dict], nodes: dict, links
             for nb, w, lq in adjacency[rid]:
                 if dist + w < best.get(nb, 1e9):
                     best[nb] = dist + w
-                    tree[routers[nb]["id"]] = {"id": routers[nb]["id"], "children": [],
-                                               "edge": {"kind": "link", "lq": lq},
+                    # cost: the route cost to the leader along this path (sum of the link costs)
+                    tree[routers[nb]["id"]] = {"id": routers[nb]["id"], "children": [], "cost": int(dist + w),
+                                               "edge": {"kind": "link", "lq": lq, "cost": w},
                                                "_parent": routers[rid]["id"]}
                     heapq.heappush(queue, (dist + w, nb))
     for rid, m in routers.items():

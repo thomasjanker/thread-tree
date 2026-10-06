@@ -157,6 +157,9 @@ class TopologyTests(unittest.TestCase):
         root = snapshot(e, T0)["partitions"][0]["root"]
         via = next(c for c in root["children"] if c["id"] == "bb" * 8)
         self.assertEqual([c["id"] for c in via["children"]], ["cc" * 8])
+        # each router shows its route cost to the leader, each router link its link cost
+        self.assertEqual((root["cost"], via["cost"], via["edge"]["cost"]), (0, 1, 1))
+        self.assertEqual((via["children"][0]["cost"], via["children"][0]["edge"]["cost"]), (2, 1))
 
     def test_child_id_has_nine_bits(self):
         self.assertEqual(A.child_id(0x2601), 0x001 | 0x200 & 0x1FF)
