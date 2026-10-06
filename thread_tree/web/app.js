@@ -2,7 +2,8 @@
 
 const ROLES = ['leader', 'router', 'fed', 'med', 'sed', 'child', 'unknown'];
 const TYPES = ['rloc', 'aloc', 'ml-eid', 'omr', 'link-local'];
-const VIEWS = ['tree', 'mesh', 'table', 'diag', 'tests', 'log', 'live'];
+const VIEWS = ['tree', 'mesh', 'table', 'diag', 'tests', 'log', 'live', 'legend'];
+const PAGES = ['tests', 'log', 'live', 'legend'];  // views that work without a tree and have no detail panel
 const state = { notice: null, lang: 'en', dicts: {}, config: null, topo: null, status: null, view: 'tree', partition: null, selected: null, filter: '',
   diag: null, diagNode: null, diagDetail: null, diagFilter: '', diagSort: { key: 'status', dir: -1 },
   folds: {} };  // open / closed state of foldable sections, kept while the page is drawn again
@@ -349,41 +350,6 @@ function renderDrawer() {
 }
 
 // ---- legend ----------------------------------------------------------------
-function renderLegend() {
-  const dlg = document.getElementById('legend');
-  const grid = (...rows) => h('div', { class: 'legend-grid' }, rows.flat());
-  dlg.replaceChildren(
-    h('h2', {}, t('legend')),
-    h('h3', {}, t('legend.roles')),
-    grid(ROLES.filter(r => r !== 'unknown').map(r => [roleChip(r), h('span', {}, ...(r === 'fed' ? [abbr('FED'), ' / REED'] : r === 'med' ? [abbr('MED')] : r === 'sed' ? [abbr('SED')] : [])) ]),
-      [h('span', { class: 'chip', style: 'background:var(--br)' }, 'BR'), h('span', {}, abbr('BR'), ' — ', t('legend.br'))],
-      [h('span', {}, '◌'), h('span', {}, t('legend.offline'))],
-      [h('span', { class: 'tag reach-indirect' }, t('reach.indirect')), h('span', {}, t('legend.indirect'))],
-      [h('span', { class: 'tag reach-direct' }, t('reach.direct')), h('span', {}, t('legend.direct'))],
-      [h('span', { class: 'tag' }, t('online.indirect')), h('span', {}, t('online.indirect.tip'))],
-      [h('span', { class: 'dot dot-warn' }), h('span', {}, t('legend.health'))],
-      [h('span', { class: 'tag' }, t('diag.self')), h('span', {}, t('diag.self.tip'))]),
-    h('h3', {}, t('legend.severity')),
-    grid(['ok', 'info', 'warn', 'crit'].map(sev => [h('span', { class: `sev sev-${sev}` }, t('sev.' + sev)), h('span', {}, t('legend.sev.' + sev))])),
-    h('h3', {}, t('legend.tests')),
-    grid(['moved', 'searching', 'waiting'].map(st => [h('span', { class: `tag test-${st}` }, t('diag.test.status.' + st)), h('span', {}, t('legend.test.' + st))]),
-      [h('span', { class: 'tag' }, 'CSL'), h('span', {}, t('legend.csl'))]),
-    h('h3', {}, t('legend.edges')),
-    grid([h('span', { class: 'chip', style: 'background:var(--router)' }, '━'), t('legend.edge.link')],
-      [h('span', { class: 'chip', style: 'background:var(--line);color:var(--text)' }, '─'), t('legend.edge.child')],
-      [h('span', { class: 'chip', style: 'background:var(--muted)' }, '┄'), t('legend.edge.unknown')],
-      [h('span', { class: 'mesh-badge lq-3' }, '1'), t('legend.tree.linkcost')],
-      [h('span', { class: 'cost-chip' }, tfill('tree.cost', { cost: 3 })), t('legend.tree.cost')],
-      [h('span', { class: 'mesh-badge lq-3' }, '3'), t('legend.mesh.lq')],
-      [h('span', { class: 'mesh-badge lq-1 lossy' }, '1'), t('legend.mesh.loss')]),
-    h('h3', {}, t('legend.types')),
-    grid(TYPES.map(ty => [h('span', { class: 'tag' }, typeLabel(ty)), abbrDesc(ty)])),
-    h('h3', {}, t('legend.sources')),
-    grid([h('span', { class: 'tag' }, t('d.source.derived')), t('legend.source.derived')], [h('span', { class: 'tag' }, t('d.source.observed')), t('legend.source.observed')]),
-    h('h3', {}, t('legend.abbr')),
-    grid(Object.entries(dict().abbr).map(([k, [name, desc]]) => [h('strong', {}, k), h('span', {}, `${name}. ${desc}`)])),
-    h('p', {}, h('button', { type: 'button', onclick: () => dlg.close() }, t('legend.close'))));
-}
 function abbrDesc(type) {
   const map = { rloc: 'RLOC', aloc: 'ALOC', 'ml-eid': 'ML-EID', omr: 'OMR' };
   if (type === 'link-local') return dict()['type.link-local'] + ' (fe80::/10)';
@@ -481,8 +447,34 @@ function renderSettings(message) {
     ? h('dl', { class: 'info' }, devices.map(s => [h('dt', {}, t(s.kind ? `sticks.${s.kind}` : 'sticks.other')),
       h('dd', { class: 'mono' }, `${s.path} (USB ${s.usb}${s.product ? ', ' + s.product : ''})${s.used ? ' — ' + t('sticks.used') : ''}${s.error ? ' — ' + s.error : ''}`)]))
     : h('p', { class: 'muted' }, t('sticks.none')), h('p', { class: 'muted small' }, t('sticks.help'))] : [];
-  dlg.replaceChildren(h('h2', {}, t('settings')), h('h3', {}, t('set.current')), info, form, msg, stickList,
+  const langSel = h('select', { id: 'lang', 'aria-label': t('set.lang') },
+    h('option', { value: 'en', selected: state.lang === 'en' }, 'English'), h('option', { value: 'de', selected: state.lang === 'de' }, 'Deutsch'));
+  langSel.addEventListener('change', () => setLang(langSel.value));
+  const display = [h('h3', {}, t('set.display')), h('label', { for: 'lang' }, t('set.lang')), h('div', { class: 'field' }, langSel)];
+  const diag = state.status?.diagnostics ? [h('h3', {}, t('header.diag')), h('div', { id: 'settings-diag' }),
+    h('p', { class: 'muted small' }, t('header.diag.tip'))] : [];
+  dlg.replaceChildren(h('h2', {}, t('settings')), ...display, ...diag, h('h3', {}, t('set.current')), info, form, msg, ...stickList,
     h('p', {}, h('button', { type: 'button', onclick: () => dlg.close() }, t('legend.close'))));
+  renderDiagSwitch();
+}
+
+function setLang(lang) {
+  state.lang = lang;
+  try { localStorage.setItem('lang', lang); } catch { /* ignore */ }
+  render();
+  renderSettings();
+}
+
+// the switch of the active diagnostics (in the settings): off, the stick stays in the network but asks nothing
+function renderDiagSwitch() {
+  const box = document.getElementById('settings-diag');
+  if (!box) return;
+  const on = !state.status?.diagnostics_paused;
+  const sw = h('button', { type: 'button', role: 'switch', 'aria-checked': String(on), class: `switch${on ? ' on' : ''}`,
+    disabled: state.config?.can_name === false, onclick: () => setDiagEnabled(!on) },
+  icon('antenna'), h('span', {}, t('header.diag')), h('span', { class: 'track' }, h('span', { class: 'knob' })),
+  h('span', { class: 'state' }, t(on ? 'header.diag.state_on' : 'header.diag.state_off')));
+  fill(box, sw);
 }
 
 // ---- the USB sticks: plugged in, what for -------------------------------------
@@ -490,7 +482,7 @@ function stickChip(kind, sticks) {
   const s = sticks.find(x => x.kind === kind);
   const state = !s ? 'none' : s.error ? 'error' : s.used ? 'ok' : 'idle';
   const tip = !s ? t(`sticks.${kind}.none`) : `${t(`sticks.${kind}`)}: ${s.path} (USB ${s.usb})${s.error ? ' — ' + s.error : s.used ? '' : ' — ' + t('sticks.idle')}`;
-  return h('span', { class: `stick stick-${state}`, title: tip }, icon(kind === 'sniffer' ? 'antenna' : 'diag'), h('span', {}, t(`sticks.${kind}.short`)));
+  return h('span', { class: `stick stick-${state}`, title: `${tip} — ${t('sticks.open')}`, onclick: openSettings }, icon(kind === 'sniffer' ? 'antenna' : 'diag'), h('span', {}, t(`sticks.${kind}.short`)));
 }
 function renderSticks(st) {
   const el = document.getElementById('sticks');
@@ -513,21 +505,11 @@ function render() {
     el.title = tip || text;
     return el;
   };
-  label('legend-btn', 'legend', t('legend'));
   label('settings-btn', 'settings', t('settings'));
   label('rebuild-btn', 'rebuild', t('rebuild'), t('rebuild.tip')).disabled = state.config?.can_name === false;  // same rule as naming
-  const db = document.getElementById('diag-btn');  // a switch, always reachable, also with an empty tree
-  const on = !state.status?.diagnostics_paused;
-  db.hidden = !state.status?.diagnostics;
-  db.setAttribute('role', 'switch');
-  db.setAttribute('aria-checked', String(on));
-  db.className = `switch${on ? ' on' : ''}`;
-  db.title = t('header.diag.tip');
-  db.disabled = state.config?.can_name === false;
-  fill(db, icon('antenna'), h('span', {}, t('header.diag')), h('span', { class: 'track' }, h('span', { class: 'knob' })),
-    h('span', { class: 'state' }, t(on ? 'header.diag.state_on' : 'header.diag.state_off')));
+  renderDiagSwitch();
   const views = document.getElementById('views');
-  const VIEW_ICONS = { tree: 'tree', mesh: 'mesh', table: 'table', diag: 'diag', tests: 'tests', log: 'log', live: 'live' };
+  const VIEW_ICONS = { tree: 'tree', mesh: 'mesh', table: 'table', diag: 'diag', tests: 'tests', log: 'log', live: 'live', legend: 'legend' };
   views.replaceChildren(...VIEWS.map(v => h('button', { type: 'button', role: 'tab', class: 'ibtn', 'aria-selected': String(v === state.view),
     onclick: () => { state.view = v; render(); if (['diag', 'tests', 'log', 'live'].includes(v)) poll(); } }, icon(VIEW_ICONS[v]), h('span', {}, t('view.' + v)))));
 
@@ -550,16 +532,16 @@ function render() {
   const view = document.getElementById('view');
   const topo = state.topo;
   const sel = document.getElementById('partition');
-  if (!topo) { view.replaceChildren(); return; }
+  if (!topo) { view.replaceChildren(state.view === 'legend' ? renderLegend() : ''); return; }
   if (state.partition == null || !topo.partitions.some(p => p.id === state.partition)) state.partition = topo.partitions[0]?.id ?? null;
   sel.replaceChildren(...topo.partitions.map(p => h('option', { value: p.id, selected: p.id === state.partition }, `${t('partition')} ${p.id.toString(16)} (${Object.values(topo.nodes).filter(n => n.partition_id === p.id && !n.placeholder).length})`)));
   sel.hidden = topo.partitions.length < 2;
   const p = partitionData();
-  if (!['tests', 'log', 'live'].includes(state.view) && (!p || Object.values(topo.nodes).filter(n => !n.placeholder).length === 0)) { view.replaceChildren(h('div', { class: 'empty' }, t('empty'))); renderDrawer(); return; }
+  if (!PAGES.includes(state.view) && (!p || Object.values(topo.nodes).filter(n => !n.placeholder).length === 0)) { view.replaceChildren(h('div', { class: 'empty' }, t('empty'))); renderDrawer(); return; }
   const scroll = [view.scrollLeft, view.scrollTop];
-  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : state.view === 'table' ? renderTable(p) : state.view === 'tests' ? renderTests() : state.view === 'log' ? renderLog() : state.view === 'live' ? renderLive() : renderDiagnose());
+  view.replaceChildren(state.view === 'tree' ? renderTree(p) : state.view === 'mesh' ? renderMesh(p) : state.view === 'table' ? renderTable(p) : state.view === 'tests' ? renderTests() : state.view === 'log' ? renderLog() : state.view === 'live' ? renderLive() : state.view === 'legend' ? renderLegend() : renderDiagnose());
   [view.scrollLeft, view.scrollTop] = scroll;
-  if (['diag', 'tests', 'log', 'live'].includes(state.view)) document.getElementById('drawer').hidden = true;
+  if (state.view === 'diag' || PAGES.includes(state.view)) document.getElementById('drawer').hidden = true;
   else renderDrawer();
 }
 
@@ -590,14 +572,9 @@ async function init() {
   const stored = (() => { try { return localStorage.getItem('lang'); } catch { return null; } })();
   state.lang = stored || (navigator.language.startsWith('de') ? 'de' : 'en');
   for (const l of ['en', 'de']) state.dicts[l] = await fetch(`/i18n/${l}.json`).then(r => r.json());
-  const langSel = document.getElementById('lang');
-  langSel.value = state.lang;
-  langSel.addEventListener('change', () => { state.lang = langSel.value; try { localStorage.setItem('lang', state.lang); } catch { /* ignore */ } render(); renderLegend(); renderSettings(); });
   document.getElementById('partition').addEventListener('change', e => { state.partition = Number(e.target.value); render(); });
   document.getElementById('settings-btn').addEventListener('click', openSettings);
   document.getElementById('rebuild-btn').addEventListener('click', rebuildTree);
-  document.getElementById('diag-btn').addEventListener('click', () => setDiagEnabled(!!state.status?.diagnostics_paused));
-  document.getElementById('legend-btn').addEventListener('click', () => { renderLegend(); document.getElementById('legend').showModal(); });
   render();
   loadConfig().then(render);
   await poll();

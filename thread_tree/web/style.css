@@ -183,7 +183,6 @@ span.mesh-badge.lq-3 { border-color: var(--ok); } span.mesh-badge.lq-1 { border-
 .card.test { margin: 10px 0; } .card.test.running { border-color: var(--warn); border-width: 2px; }
 .tag.test-moved { color: var(--ok); border-color: var(--ok); } .tag.test-searching { color: var(--warn); border-color: var(--warn); }
 .tag.test-waiting { color: var(--muted); }
-#diag-btn.diag-off { border-color: var(--warn); color: var(--warn); }
 .card.test-card h3 { margin: 0 0 6px; font-size: 14px; } .card.test-card select { max-width: 100%; }
 button:disabled { opacity: .5; cursor: default; } button:disabled:hover { border-color: var(--line); }
 .test-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 12px; }
@@ -207,7 +206,7 @@ nav button[aria-selected="true"] .icon { stroke: #fff; }
 .switch.on .track { background: var(--ok); } .switch.on .knob { left: 18px; }
 .switch .state { font-size: 12px; color: var(--muted); min-width: 2.2em; }
 .switch:not(.on) .icon { color: var(--muted); }
-@media (max-width: 900px) { header .ibtn span, .switch > span:not(.track):not(.knob) { display: none; } }
+@media (max-width: 900px) { header .ibtn span, header .switch > span:not(.track):not(.knob) { display: none; } }
 .arrow { fill: var(--muted); } .arrow.lq-3 { fill: var(--ok); } .arrow.lq-2 { fill: var(--warn); } .arrow.lq-1 { fill: var(--crit); }
 .mesh-view { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; }
 .mesh-legend { max-width: 360px; font-size: 13px; } .mesh-legend h3 { margin: 0 0 8px; font-size: 13px; color: var(--muted); }
@@ -229,3 +228,34 @@ svg text.cost-txt { fill: var(--muted); font-size: 10px; font-weight: 600; }
 .edge-cost circle { fill: var(--surface); stroke-width: 1.5; stroke: var(--ok); }
 .edge-cost.lq2 circle { stroke: var(--warn); } .edge-cost.lq1 circle { stroke: var(--crit); }
 svg .edge-cost text { font-size: 10px; font-weight: 700; }
+
+/* legend view and protocol stack */
+.legend-page { max-width: 1100px; margin: 0 auto; padding: 16px; }
+.legend-page h3 { margin: 22px 0 8px; font-size: 14px; color: var(--muted); }
+.legend-page h4 { margin: 16px 0 6px; font-size: 13px; }
+.l-app { --layer: var(--leader); } .l-ctrl { --layer: var(--router); } .l-transport { --layer: var(--fed); }
+.l-network { --layer: var(--med); } .l-adapt { --layer: var(--br); } .l-mac { --layer: var(--sed); } .l-phy { --layer: var(--muted); }
+.stack { display: flex; flex-direction: column; gap: 4px; }
+.stack-layer { display: grid; grid-template-columns: 170px 1fr 1fr; gap: 12px; align-items: start; padding: 8px 12px;
+  border-left: 5px solid var(--layer); border-radius: 6px; background: color-mix(in srgb, var(--layer) 10%, var(--surface)); }
+.stack-name { display: flex; flex-direction: column; }
+.stack-protos p, .stack-path p { margin: 4px 0 0; }
+.stack-chip { display: inline-block; margin: 0 4px 2px 0; padding: 1px 7px; border-radius: 10px; font-size: 12px; font-weight: 600;
+  color: var(--surface); background: var(--layer); }
+.stack-keys { margin-top: 8px; padding: 8px 12px; border: 1px dashed var(--line); border-radius: 6px; }
+.frame-bar { display: flex; gap: 2px; min-height: 54px; }
+.frame-part { display: flex; flex-direction: column; justify-content: center; min-width: 0; padding: 4px 6px; overflow: hidden;
+  border-top: 4px solid var(--layer); background: color-mix(in srgb, var(--layer) 14%, var(--surface)); cursor: help; }
+.frame-part strong, .frame-part span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.stack-path { display: flex; gap: 0; padding: 0; margin: 0; list-style: none; counter-reset: step; }
+.stack-path li { flex: 1; position: relative; padding: 8px 10px; margin-right: 22px; border: 1px solid var(--line);
+  border-radius: 6px; background: var(--surface); display: flex; flex-direction: column; gap: 2px; }
+.stack-path li:not(:last-child)::after { content: '→'; position: absolute; right: -19px; top: 50%; transform: translateY(-50%);
+  color: var(--muted); font-weight: 700; font-size: 16px; }
+.stick { cursor: pointer; }
+@media (max-width: 800px) {
+  .stack-layer { grid-template-columns: 1fr; gap: 4px; }
+  .frame-bar { flex-direction: column; } .frame-part { flex: none !important; }
+  .stack-path { flex-direction: column; gap: 14px; } .stack-path li { margin-right: 0; }
+  .stack-path li:not(:last-child)::after { content: '↓'; right: 50%; top: auto; bottom: -15px; transform: none; }
+}

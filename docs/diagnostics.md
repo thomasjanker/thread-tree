@@ -23,7 +23,7 @@ python3 -m thread_tree run ... --diag-port ... --diag-interval 600     # seconds
 
 The **Diagnosis** tab then has an "Active diagnostics" card (state, last round, "Ask now") and the values below.
 `POST /api/diagnostics/run` (JSON body `{}`, same access rule as naming a device) starts a round at once; it answers
-`409` without `--diag-port` or while switched off. The card's **Switch off** button (`POST /api/diagnostics/enabled`
+`409` without `--diag-port` or while switched off. The switch in the **Settings** (`POST /api/diagnostics/enabled`
 with `{"enabled": false}`) stops the background queries: the stick stays in the network, asks nothing, and the active
 values grow old; the setting is kept in `<db>.settings.json` across restarts. A new dataset in the Settings makes the node join the new network; a node that is attached
 to another network than the dataset describes (name, channel, PAN ID, extended PAN ID or key differs) is moved to ours.

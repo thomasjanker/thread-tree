@@ -10,7 +10,7 @@ your network. It works with one or two nRF52840 USB sticks:
 - a **diagnostic node** (optional) joins the network as an end device and *asks* the routers what they know: Thread
   versions, MAC addresses of all children, the signal and error rate of every link, manufacturer and model.
 
-The UI is in English and German, with a legend for every abbreviation. No Python dependencies; the sniffer needs
+The UI is in English and German, with a legend for every abbreviation and an illustrated protocol stack. No Python dependencies; the sniffer needs
 `tshark` from Wireshark.
 
 ![Tree view with the detail panel of a router](docs/screenshots/tree.png)
@@ -141,8 +141,11 @@ journalctl -u thread-tree -f          # log; after an update: git pull && sudo s
   bytes = Thread EUI-64, 6 bytes = Ethernet/Wi-Fi) or IPv6 address in any notation. A Matter bridge that HA reaches over
   Ethernet (e.g. DIRIGERA) shows its Ethernet MAC there, which is not its Thread address.
 - **Rebuild tree** (header) forgets what was learned and learns it again; names and the dataset stay.
-- **Active diagnostics: on / off** (header, with a diagnostic node): off, the stick stays in the network but asks
-  nothing; kept across restarts.
+- **Settings** (header; also a click on a stick in the header): language, **active diagnostics on / off** (with a
+  diagnostic node: off, the stick stays in the network but asks nothing; kept across restarts), the Thread dataset and
+  the serial devices.
+- **Legend** (tab): symbols, colours, abbreviations, and Thread's protocol stack from the radio to Matter, with what
+  thread-tree reads on each layer, one frame on air and the way of a Matter command to a battery device.
 - **Diagnosis** and **Tests**: see below. Data is saved every 30 s and on shutdown; devices unseen for 30 days are
   removed.
 
