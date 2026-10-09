@@ -109,6 +109,7 @@ class Engine:
         self.diag_self: str | None = None  # extended address of the node that runs the active diagnostics
         self.diag_ts = 0.0  # time of the latest topology answer of the active diagnostics
         self.diag_ttl = DIAG_TTL  # how long its answers count as current (the collector raises it for long intervals)
+        self.diag_interval = DIAG_TTL / 3  # time between two active rounds (set by the collector)
         self.diag_info: dict = {}  # status of the active collector, for the UI (not persisted)
         self.capture = NodeStats()  # all frames heard, including those without transmitter address (ACKs)
         self.last_frame_any: float | None = None  # last frame the sniffer received (not persisted)
@@ -827,7 +828,15 @@ class Engine:
 
     def presence_of(self, node: Node, role: str, now: float) -> tuple[bool, bool]:
         return presence(node.last_heard, node.last_seen, node.last_addressed, role, self.presence_now(now),
-                        node.last_diag, self.diag_ttl, self.offline_limit(node, role))
+                        node.last_diag, self.diag_ttl, self.offline_limit(node, role), self.diag_interval)
+
+    def alive_until(self, node: Node, role: str) -> float:
+        """When the device's silence passed the limit (what presence_of judges by): the offline event's time."""
+        limit = self.offline_limit(node, role)
+        until = node.last_seen + limit
+        if node.last_diag > 0:
+            until = max(until, node.last_diag + limit + (self.diag_interval if node.last_heard else 0.0))
+        return until
 
     def _signature(self, node: Node, now: float) -> dict:
         role = self.role_of(node)
@@ -868,7 +877,7 @@ class Engine:
                     if sig["online"]:  # back with the frame (or answer) that brought it back
                         self._log(node, within(alive), "online")
                     else:  # offline since its silence passed the limit
-                        self._log(node, within(alive + self.offline_limit(node, sig["role"])), "offline")
+                        self._log(node, within(self.alive_until(node, sig["role"])), "offline")
             self._network_tick()
             self.capture.prune(now)
             for node in self.nodes.values():

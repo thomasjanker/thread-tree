@@ -186,6 +186,7 @@ class DiagThread(threading.Thread):
             self._paused.set()
         with engine.lock:
             engine.diag_ttl = max(DIAG_TTL, 3 * self.interval)  # its answers stay current for three rounds
+            engine.diag_interval = self.interval
         self.auto = port == "auto"  # find the stick by its USB identity (and again after it was unplugged)
         self.found = not self.auto  # nothing is shown before a stick turned up
         self.current_port: str | None = None
