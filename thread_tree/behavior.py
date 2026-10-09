@@ -131,7 +131,9 @@ def on_frame_counter(behavior: dict, ts: float, counter: int, key: int | None, c
     """Frame counter of a secured frame of this device. Returns a restart once it is confirmed. A device keeps
     separate counters for MAC frames and for MLE messages (Wireshark shows both in the same field): context tells
     which. A jump only counts when the next frame continues from the new value; if it goes back to the old one,
-    the jump was a second counter, not a restart."""
+    the jump was a second counter, not a restart. A small step back is no restart either: a frame queued for a
+    sleepy child is sent again on its next poll with the counter it got first (OpenThread never counts backwards
+    after a reboot: it stores the counter ahead and skips forward; only an erased device starts again near 0)."""
     counters = behavior.get("fc")
     if not isinstance(counters, dict) or any(not isinstance(v, dict) for v in counters.values()):
         counters = behavior["fc"] = {}  # written by an older version (one counter for all frames)
@@ -141,15 +143,17 @@ def on_frame_counter(behavior: dict, ts: float, counter: int, key: int | None, c
         return None  # first frame, or a key switch: every device starts counting again
     pending = last.get("pending")
     if pending:
-        if pending["to"] <= counter <= pending["to"] + COUNTER_AHEAD:
-            return {k: pending[k] for k in ("how", "from", "to")} | {"ts": pending["ts"]}  # confirmed
+        confirmed = (pending["to"] <= counter <= pending["to"] + COUNTER_AHEAD and
+                     (pending["how"] == "skip" or counter < pending["from"] - 10))  # a reset stays below the old count
+        if confirmed:
+            return {k: pending[k] for k in ("how", "from", "to")} | {"ts": pending["ts"]}
         if last["c"] <= counter or abs(counter - pending["from"]) <= COUNTER_AHEAD:
             counters[context] = {"c": pending["from"] if counter < pending["to"] else counter, "k": key, "ts": ts,
                                  "pending": None}  # back on the old count: there was no restart
             return None
     prev, prev_ts = last["c"], last["ts"]
     jump = None
-    if counter < prev - 10:
+    if counter < prev - 10 and (counter < COUNTER_AHEAD or counter < prev - COUNTER_AHEAD):  # else: a repeated frame
         jump = {"how": "reset", "from": prev, "to": counter, "ts": ts}
     elif counter - prev >= COUNTER_AHEAD and ts - prev_ts <= COUNTER_JUMP_WITHIN:
         jump = {"how": "skip", "from": prev, "to": counter, "ts": ts}

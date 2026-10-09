@@ -1078,6 +1078,9 @@ class Engine:
             for node_id, ts, kind, params in state.get("events", []):
                 if kind == "reboot" and params.get("how") in ("reset", "skip") and "counter" not in params:
                     continue  # written by a version that mixed the MAC and MLE counters: false alarms
+                if (kind == "reboot" and params.get("how") == "reset" and isinstance(params.get("from"), int)
+                        and isinstance(params.get("to"), int) and params["to"] >= B.COUNTER_AHEAD and params["from"] - params["to"] <= B.COUNTER_AHEAD):
+                    continue  # a frame repeated to a sleepy child, taken for a restart by an older version
                 if node_id == NETWORK_ID:
                     self.net_events.append({"ts": ts, "kind": kind, "params": params})
                 elif node_id in self.nodes:

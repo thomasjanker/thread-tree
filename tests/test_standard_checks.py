@@ -47,6 +47,13 @@ class RuleTests(unittest.TestCase):
         self.assertEqual(B.on_frame_counter(b, 61, 1101, 2)["how"], "skip")          # restart: stored counter ahead
         self.assertIsNone(B.on_frame_counter(b, 5000, 2500, 2))                      # a long silence: frames were sent
 
+    def test_a_repeated_frame_is_no_restart(self):
+        """A frame queued for a sleepy child is sent again on its next poll with its first counter: a small step back."""
+        b = {}
+        events = [B.on_frame_counter(b, t, c, 1) for t, c in
+                  ((0, 1197550), (1, 1197561), (2, 1197533), (3, 1197562), (4, 1197534), (5, 1197535), (6, 1197563))]
+        self.assertEqual(events, [None] * 7)
+
     def test_two_counters_in_one_field_are_no_restart(self):
         """MAC frames and MLE messages each have their own counter; seen in turn they look like jumps."""
         b = {}
@@ -180,6 +187,7 @@ class CounterContextTests(unittest.TestCase):
             e._log(node, T0 + 1, "reboot", how="reset", **{"from": 9, "to": 1})                 # old version
             e._log(node, T0 + 2, "reboot", how="reset", counter="mac", **{"from": 9, "to": 1})  # new version
             e._log(node, T0 + 3, "reboot", how="link_request")
+            e._log(node, T0 + 4, "reboot", how="reset", counter="mac", **{"from": 1197561, "to": 1197533})  # a repeated frame
             store.save(e.export_state(clear_dirty=True))
             e2 = Engine()
             e2.load_state(store.load())
