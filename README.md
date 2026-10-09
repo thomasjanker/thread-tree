@@ -198,7 +198,7 @@ warning in the log:
 | Restarts | the MAC frame counter of a device started again, or skipped ahead by 1000 or more within 2 minutes (OpenThread stores it that far ahead) |
 | Child supervision (Thread 1.2) | the parent sent a child nothing for 1.5 times the supervision interval the child announced |
 | Network Data | a router kept advertising an older Network Data version than its partition for more than 2 minutes |
-| Advertisement timing | a router sent no MLE advertisement for 100 s or more (Trickle: at least every 32 s) while the sniffer heard others |
+| Advertisement timing | a router sent no MLE advertisement for 100 s or more (Trickle: about every 32 s) while the sniffer heard others, and missing that many in a row is very unlikely (< 0.1 %) at the share of this router's advertisements the sniffer otherwise receives |
 | Unanswered attaches | a Child ID Request got no Child ID Response (full child table, or lost frames); counted for the router |
 | Radio activity | a sleepy device polls more than every 10 s and 3 times as often as the typical sleepy device here |
 

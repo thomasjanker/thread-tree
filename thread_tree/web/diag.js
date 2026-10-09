@@ -48,7 +48,7 @@ function specialEventText(kind, p) {
     case 'reboot': return tpl(p.how === 'reset' ? 'event.reboot.reset' : 'event.reboot.skip', { a: p.from, b: p.to });
     case 'supervision_gap': return tpl('event.supervision_gap', { parent: r(p.parent), seconds: fmtDuration(p.seconds), interval: fmtDuration(p.interval) });
     case 'netdata_lag': return tpl('event.netdata_lag', { seconds: fmtDuration(p.seconds), version: p.version, current: p.current });
-    case 'adv_gap': return tpl('event.adv_gap', { seconds: fmtDuration(p.seconds) });
+    case 'adv_gap': return tpl(p.heard !== undefined ? 'event.adv_gap.heard' : 'event.adv_gap', { seconds: fmtDuration(p.seconds), heard: p.heard });
     case 'attach_unanswered': return tpl('event.attach_unanswered', { router: r(p.router) });
     case 'leader_change': return tpl('event.leader_change', { partition: pid(p.partition), a: r(p.from), b: r(p.to) });
     case 'partition_new': return tpl('event.partition_new', { partition: pid(p.partition), leader: r(p.leader) });

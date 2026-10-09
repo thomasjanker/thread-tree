@@ -1081,6 +1081,8 @@ class Engine:
                 if (kind == "reboot" and params.get("how") == "reset" and isinstance(params.get("from"), int)
                         and isinstance(params.get("to"), int) and params["to"] >= B.COUNTER_AHEAD and params["from"] - params["to"] <= B.COUNTER_AHEAD):
                     continue  # a frame repeated to a sleepy child, taken for a restart by an older version
+                if kind == "adv_gap" and "heard" not in params:
+                    continue  # judged without the sniffer's reception of the router: mostly missed frames
                 if node_id == NETWORK_ID:
                     self.net_events.append({"ts": ts, "kind": kind, "params": params})
                 elif node_id in self.nodes:

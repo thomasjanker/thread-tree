@@ -239,7 +239,7 @@ def seed_history(engine: Engine, now: float, hours: int = 24, seed: int = 7) -> 
             engine._log(flapper, now - 4 * 1800 - 20, "attach_unanswered", router=17)
         if weak_router is not None:
             for hours in (5.9, 5.6, 5.3):  # before its outage
-                engine._log(weak_router, now - hours * 3600, "adv_gap", seconds=140)
+                engine._log(weak_router, now - hours * 3600, "adv_gap", seconds=140, heard=97)
         garden = engine.nodes.get("c8d1d1fffe000016")
         if garden is not None:
             engine._log(garden, now - 6 * 3600 + 200, "netdata_lag", version=6, current=7, seconds=150)

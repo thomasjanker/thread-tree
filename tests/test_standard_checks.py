@@ -63,11 +63,23 @@ class RuleTests(unittest.TestCase):
 
     def test_advertisement_gaps(self):
         b = {}
-        B.on_advertisement(b, 0, never)
-        self.assertIsNone(B.on_advertisement(b, 60, never))
-        self.assertEqual(B.on_advertisement(b, 200, never), {"seconds": 140})
-        self.assertIsNone(B.on_advertisement(b, 2000, never))                        # it was off: offline, not timing
-        self.assertIsNone(B.on_advertisement(b, 2150, lambda s, e: True))            # the sniffer was deaf
+        for i in range(30):                                                          # the sniffer hears every one
+            B.on_advertisement(b, i * 32, never)
+        self.assertEqual(B.on_advertisement(b, 29 * 32 + 140, never), {"seconds": 140, "heard": 100})
+        self.assertIsNone(B.on_advertisement(b, 29 * 32 + 2000, never))             # it was off: offline, not timing
+        self.assertIsNone(B.on_advertisement(b, 29 * 32 + 2150, lambda s, e: True)) # the sniffer was deaf
+
+    def test_advertisement_gaps_of_a_router_the_sniffer_hears_badly(self):
+        """Far from the sniffer, a router loses some advertisements anyway: a gap of three is no fault of the router."""
+        b, ts = {}, 0
+        for i in range(40):                                                          # every 3rd one is lost
+            ts += 64 if i % 3 == 2 else 32
+            self.assertIsNone(B.on_advertisement(b, ts, never))
+        self.assertEqual(B.adv_reception(b), round(B.adv_reception(b), 3))
+        self.assertLess(B.adv_reception(b), 0.8)
+        self.assertIsNone(B.on_advertisement(b, ts + 120, never))                    # 2.75 missed: likely at this reception
+        self.assertIsNotNone(B.on_advertisement(b, ts + 120 + 400, never))           # 11.5 missed: not
+        self.assertIsNone(B.on_advertisement({}, 140, never))                        # reception unknown yet
 
     def test_supervision(self):
         b = {"supervision": 120}

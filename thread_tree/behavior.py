@@ -99,6 +99,10 @@ COUNTER_AHEAD = 1000         # OpenThread stores the frame counter this far ahea
 COUNTER_JUMP_WITHIN = 120.0  # s: ... so a skip of that size in a short time means a restart
 ADV_GAP = 100.0              # s without an advertisement of a router (Trickle sends at least every 32 s) ...
 ADV_GAP_MAX = 900.0          # ... but longer means it was off (offline), not a timing fault
+ADV_PERIOD = 32.0            # s: a router in a stable network advertises once per Trickle interval (32 s) on average
+ADV_NEEDED = 20              # advertisements before the sniffer's reception of a router is known
+ADV_WINDOW = 6 * 3600.0     # s of history the reception estimate is based on
+ADV_CHANCE = 0.001           # a gap counts only if the sniffer missing that many in a row is less likely than this
 SUPERVISION_SLACK = 1.5      # a gap in the frames to a child longer than this many supervision intervals breaks it
 NETDATA_LAG = 120.0          # s a router may advertise an older Network Data version than its partition
 
@@ -161,12 +165,33 @@ def on_frame_counter(behavior: dict, ts: float, counter: int, key: int | None, c
     return None
 
 
+def adv_reception(behavior: dict) -> float | None:
+    """Share of a router's advertisements the sniffer receives: heard ones per expected one (one per 32 s)."""
+    n, first, last = behavior.get("adv_n", 0), behavior.get("adv_first"), behavior.get("adv_last")
+    if n < ADV_NEEDED or first is None or last is None or last <= first:
+        return None
+    return min(1.0, (n - 1) * ADV_PERIOD / (last - first))
+
+
 def on_advertisement(behavior: dict, ts: float, sniffer_was_down) -> dict | None:
+    """An advertisement of a router. Returns a gap that the router (not the sniffer's reception) is to blame for:
+    a router far from the sniffer loses some advertisements anyway, so a gap counts only if missing that many in a
+    row is unlikely at the share the sniffer usually receives of this router."""
     last = behavior.get("adv_last")
+    heard = adv_reception(behavior)  # before this gap
     behavior["adv_last"] = max(ts, last or 0.0)
-    if last is not None and ADV_GAP <= ts - last < ADV_GAP_MAX and not sniffer_was_down(last, ts):
-        return {"seconds": round(ts - last)}
-    return None
+    if last is not None and ts - last >= ADV_GAP_MAX:  # it was off: that time says nothing about the reception
+        behavior["adv_first"], behavior["adv_n"] = ts, 0
+    first = behavior.setdefault("adv_first", ts)
+    if ts - first > ADV_WINDOW:  # the recent reception counts: halve the history
+        behavior["adv_first"], behavior["adv_n"] = ts - (ts - first) / 2, behavior.get("adv_n", 0) // 2
+    behavior["adv_n"] = behavior.get("adv_n", 0) + 1
+    if last is None or not ADV_GAP <= ts - last < ADV_GAP_MAX or sniffer_was_down(last, ts):
+        return None
+    missed = (ts - last) / ADV_PERIOD - 1  # advertisements that should have come in between
+    if heard is None or (1.0 - heard) ** missed >= ADV_CHANCE:
+        return None
+    return {"seconds": round(ts - last), "heard": round(100 * heard)}
 
 
 def on_addressed(behavior: dict, ts: float, sniffer_was_down) -> dict | None:
