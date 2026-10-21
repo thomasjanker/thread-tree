@@ -127,9 +127,13 @@ journalctl -u thread-tree -f          # log; after an update: git pull && sudo s
 
 ## Using the UI
 
-| | |
-|---|---|
-| ![Mesh view](docs/screenshots/mesh.png) | ![Diagnosis overview](docs/screenshots/diagnosis.png) |
+The screenshots show the demo mode (simulated network, no real devices).
+
+**Tree** (above), **Mesh** and **Table**:
+
+![Mesh view: routers with link quality](docs/screenshots/mesh.png)
+
+![Table view with IPv6 addresses and search](docs/screenshots/table.png)
 
 - **Tree / Mesh / Table:** click a device for its detail panel. A dotted circle marks a device the sniffer never heard
   directly; a coloured dot a warning or critical finding. In the tree, the circle on a line between two routers is its
@@ -144,12 +148,14 @@ journalctl -u thread-tree -f          # log; after an update: git pull && sudo s
 - **Settings** (header; also a click on a stick in the header): language, **active diagnostics on / off** (with a
   diagnostic node: off, the stick stays in the network but asks nothing; kept across restarts), the Thread dataset and
   the serial devices.
-- **Legend** (tab): symbols, colours, abbreviations, and Thread's protocol stack from the radio to Matter, with what
+- **Legend** (tab, [screenshot](docs/screenshots/legend.png)): symbols, colours, abbreviations, and Thread's protocol stack from the radio to Matter, with what
   thread-tree reads on each layer, one frame on air and the way of a Matter command to a battery device.
-- **Diagnosis** and **Tests**: see below. Data is saved every 30 s and on shutdown; devices unseen for 30 days are
+- **Diagnosis**, **Tests**, **Log** and **Live**: see below. Data is saved every 30 s and on shutdown; devices unseen for 30 days are
   removed.
 
 ## Diagnosis and findings
+
+![Diagnosis overview](docs/screenshots/diagnosis.png)
 
 ![Device page of a router](docs/screenshots/device.png)
 
@@ -210,11 +216,15 @@ router lost, gaps beyond the child timeout); filter "Warnings only", text filter
 stored in the database, and "Clear log" deletes it (the histories of all devices and of the network; devices, names
 and statistics stay).
 
+![Log with events and warnings](docs/screenshots/log.png)
+
 ## Guided tests
 
 The **Tests** tab: pick a test and a device, start it, then do the physical part. The report updates live, with times
 counted from the start. One test at a time; it ends by itself after 30 minutes; the last 20 reports are kept. In the demo
 the simulator plays your part.
+
+![Tests view with the eight guided tests](docs/screenshots/tests.png)
 
 | Test | You | It shows |
 |---|---|---|
@@ -240,6 +250,8 @@ UDP addresses and ports, MLE TLVs, TMF/CoAP URI, DNS/SRP names, and for an ackno
 **Full decode** has tshark decode exactly that one frame and shows the complete Wireshark tree, with every key-like
 field and any value containing the network key removed (only with the nRF sniffer or a `cmd:` source, whose raw stream
 thread-tree passes on to tshark).
+
+The demo mode has no radio, so the Live view stays empty there and has no screenshot.
 
 From the same frames the device pages show what the topology does not: the SRP host name and services a device
 registered, its Matter traffic (UDP 5540 is end-to-end encrypted: only counted), how many frames a router forwarded for
